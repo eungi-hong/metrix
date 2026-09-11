@@ -40,12 +40,18 @@ movement-detection half still works — movements come back with
 ### Running without Docker
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
+python3.13 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
-docker compose up -d db                       # or point DATABASE_URL at your own Postgres
+docker compose up -d db
 alembic upgrade head
 uvicorn app.main:app --reload
 ```
+
+> Use **Python 3.12 or 3.13** (3.12 is what the image is built on). The pinned
+> `greenlet` and `pydantic-core` ship no wheels for 3.14 and do not compile against it,
+> so a venv made with a bare `python3` will fail to install if that is your 3.14.
+> Skip `docker compose up -d db` if you would rather point `DATABASE_URL` at a Postgres
+> of your own.
 
 > The compose Postgres publishes **5433** on the host (not 5432) so it does not collide
 > with a local Postgres. `.env.example` already points at 5433.
@@ -177,7 +183,7 @@ It is a client that runs on *your* machine, not inside the container, so install
 one dependency locally first — a one-time step if you started with Docker:
 
 ```bash
-python3 -m venv .venv && source .venv/bin/activate
+python3.13 -m venv .venv && source .venv/bin/activate
 pip install httpx
 ```
 
@@ -452,13 +458,16 @@ holding process dies (a claim older than 15 minutes can be re-taken).
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                      # 110 tests, no Docker, no network, no API keys
+pytest
 ```
 
-- `tests/test_movements.py` — 30 tests on the detection math: the floor, the sigma
+110 tests. No Docker, no network, no API keys.
+
+- `tests/test_movements.py` — 35 tests. The detection math: the floor, the sigma
   term, their interaction, the no-lookahead guarantee, direction symmetry, degenerate
   inputs (empty series, flat series, duplicate dates, non-positive prices), and
-  parameter validation.
+  parameter validation. Plus the yfinance error classification that decides whether a
+  failed fetch is an unknown symbol (404) or a broken upstream (502).
 - `tests/test_api.py` — a smoke test per endpoint plus filtering, pagination, the
   202/200 ingestion states, idempotent re-ingestion, the concurrency claim, error
   mapping, and multi-turn chat.
