@@ -1,13 +1,9 @@
-# Submission notes
-
-> Draft answers to the four reflection questions, written from what actually happened
-> during the build.
-
----
-
+# Submission 
 ## 1. Process, assumptions, and key decisions
 
 ### Order of work
+
+
 
 I built it in the order that lets each stage be verified before the next depends on it:
 data model → movement detection (with tests) → news layer → ingestion → API → chat →

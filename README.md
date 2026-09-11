@@ -1,4 +1,4 @@
-# Metrix — Stock Movement News Explainer
+# Metrix: Stock Movement News Explainer
 
 Takes a ticker, finds the days it moved unusually far, and explains each one with the
 news that caused it — company news, competitor and industry news, and macro/political
@@ -21,6 +21,9 @@ docker compose up --build     # Postgres + migrations + API
 ```
 
 The API is on <http://localhost:8000>, interactive docs at <http://localhost:8000/docs>.
+
+> The `curl` examples below print raw JSON. For the same data as a readable tree,
+> skip to [Reading it in a terminal](#reading-it-in-a-terminal).
 
 ### API keys
 
@@ -168,7 +171,17 @@ traces back to a row in the database. If nothing relevant is stored, `grounded` 
 
 The JSON is nested three levels deep — movement, then the articles explaining it,
 then each article's tier, score and rationale — which is the point of the product and
-also unreadable as raw output. `scripts/show.py` renders the same payload as a tree:
+also unreadable as raw output. `scripts/show.py` renders the same payload as a tree.
+
+It is a client that runs on *your* machine, not inside the container, so install its
+one dependency locally first — a one-time step if you started with Docker:
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install httpx
+```
+
+With the venv activated, run it as:
 
 ```bash
 scripts/show.py DHI                                    # movements + their news
@@ -195,19 +208,32 @@ ready · 22 movement(s), showing 3
          oil prices, which could explain part of DHI's move as a tailwind.
 ```
 
-It is a **client of the HTTP API**, not a database shortcut — so if something is
-awkward to render, the API shape is wrong. That is how the missing price series got
-noticed.
 
-**On colour.** Only the 16 basic ANSI colours are used, never 256-colour or truecolour:
-those hardcode RGB values that fight the user's terminal theme, whereas the basic codes
-are re-mapped by the terminal to whatever the user's scheme says. Colour is applied by
-*semantic role* (`tier_hard`, `down`) defined in one table, so re-theming is one edit.
+### Flags
 
-Colour is never the only signal — direction also carries a glyph and a sign, tiers are
-spelled out, and scores are printed as numbers. It obeys `NO_COLOR`, `TERM=dumb`, and
-`--color auto|always|never`, and `auto` switches off when stdout is not a terminal, so
-piping gives clean text:
+`scripts/show.py --help` prints these too.
+
+| Flag | Does |
+|---|---|
+| `TICKER` | Required, positional. e.g. `DHI` |
+| `--ask QUESTION` | Ask `POST /chat` instead of fetching movements |
+| `--conversation ID` | Continue a previous conversation (id is printed by `--ask`) |
+| `--start DATE` / `--end DATE` | Only movements in this window |
+| `--tier easy\|medium\|hard` | Filter by relevance tier. Repeat for several |
+| `--direction up\|down` | Only up days or only down days |
+| `--min-pct N` | Only movements at least this large, in percent |
+| `--limit N` | Movements to return (default 10) |
+| `--wait` | Ingest inline if the ticker is cold — slow, but returns finished data |
+| `--refresh` | Force re-ingestion even if data is fresh |
+| `--no-sparkline` | Skip fetching prices (a year of bars is ~250 rows) |
+| `--json` | Print the raw API payload instead of the tree |
+| `--color auto\|always\|never` | Default `auto`: on for a terminal, off when piped |
+| `--base-url URL` | Default `$METRIX_URL`, else `http://localhost:8000` |
+| `--timeout SECONDS` | HTTP timeout (default 900, generous for `--wait`) |
+
+Colour is on for a terminal and off when piped, and it is never the only signal —
+direction also carries a glyph and a sign, tiers are spelled out, scores are numbers.
+So piped output loses emphasis but no information:
 
 ```bash
 scripts/show.py DHI | less        # no escape sequences
