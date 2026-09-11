@@ -15,7 +15,7 @@ GET  /health             liveness and which integrations are configured
 ## Quick start
 
 ```bash
-git clone <this repo> && cd metrix
+git clone https://github.com/eungi-hong/metrix.git && cd metrix
 cp .env.example .env          # then add your two API keys (below)
 docker compose up --build     # Postgres + migrations + API
 ```
