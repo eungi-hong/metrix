@@ -28,7 +28,7 @@ from app.core.config import settings
 from app.core.logging import get_logger
 from app.models.enums import RelevanceTier
 from app.models.news import url_fingerprint
-from app.services.llm import LLMClient
+from app.services.llm import LLMProvider
 from app.services.news.base import NewsCandidate
 from app.services.news.queries import MovementContext
 from app.services.peers import PeerSet
@@ -103,6 +103,7 @@ class ScoredCandidate:
     score: float
     rationale: str
     search_tier: str
+    scored_by: str
 
 
 def deduplicate(
@@ -128,7 +129,7 @@ async def score_candidates(
     context: MovementContext,
     candidates: list[tuple[str, NewsCandidate]],
     peers: PeerSet,
-    llm: LLMClient,
+    llm: LLMProvider,
     min_score: float | None = None,
 ) -> list[ScoredCandidate]:
     """Score every candidate against one movement; return those worth linking.
@@ -169,6 +170,7 @@ async def score_candidates(
                 score=assessment.score,
                 rationale=assessment.rationale.strip(),
                 search_tier=search_tier,
+                scored_by=llm.model,
             )
         )
 

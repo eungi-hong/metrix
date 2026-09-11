@@ -380,7 +380,7 @@ app/
     relevance.py  the scoring prompt and its structured output
     ingestion.py  orchestration: prices → movements → news → links
     chat.py       retrieval, prompt assembly, citation labels
-    llm.py        Anthropic wrapper, uniform error mapping
+    llm/          provider abstraction, Anthropic adapter, uniform error mapping
   models/         SQLAlchemy: tickers, price_history, movements, news_articles,
                   movement_news_links, news_query_cache, conversations, chat_messages
   schemas/        Pydantic request/response models

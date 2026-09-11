@@ -34,7 +34,8 @@ async def lifespan(app: FastAPI):
         "startup",
         env=settings.app_env,
         news_provider=settings.news_provider,
-        model=settings.anthropic_model,
+        llm_provider=settings.llm_provider,
+        model=settings.llm_model,
     )
     yield
     await dispose_engine()

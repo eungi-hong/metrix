@@ -39,7 +39,7 @@ from app.schemas.chat import (
     ChatSources,
     MovementSource,
 )
-from app.services.llm import LLMClient
+from app.services.llm import LLMProvider
 
 logger = get_logger(__name__)
 
@@ -79,7 +79,7 @@ class RetrievedContext:
 
 
 async def answer_question(
-    session: AsyncSession, request: ChatRequest, llm: LLMClient
+    session: AsyncSession, request: ChatRequest, llm: LLMProvider
 ) -> ChatResponse:
     """Retrieve, prompt, answer, and persist one conversation turn."""
     conversation = await _load_or_create_conversation(session, request.conversation_id)

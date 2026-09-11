@@ -30,13 +30,18 @@ class Settings(BaseSettings):
     # ------------------------------------------------------------------- db
     database_url: str = "postgresql+asyncpg://metrix:metrix@localhost:5432/metrix"
 
-    # --------------------------------------------------------------- claude
-    anthropic_api_key: str | None = None
+    # ------------------------------------------------------------------- llm
+    llm_provider: Literal["anthropic"] = "anthropic"
     # Pinned by the assignment brief. Newer IDs (claude-sonnet-5, claude-opus-5)
     # are drop-in compatible with every call this app makes.
-    anthropic_model: str = "claude-sonnet-4-6"
-    anthropic_max_tokens: int = 4096
-    anthropic_timeout_seconds: float = 60.0
+    llm_model: str = "claude-sonnet-4-6"
+    llm_max_tokens: int = 4096
+    llm_timeout_seconds: float = 60.0
+
+    # Vendor credentials, named for their vendor like `exa_api_key` below. The
+    # knobs above are not: every provider has a model, a token cap and a
+    # timeout, so naming them after one vendor is what leaked in the first place.
+    anthropic_api_key: str | None = None
 
     # ------------------------------------------------------------------ news
     news_provider: Literal["exa", "fixture"] = "exa"

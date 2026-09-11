@@ -33,7 +33,7 @@ from app.schemas.market import (
     TickerOut,
 )
 from app.services import ingestion
-from app.services.llm import LLMClient
+from app.services.llm import LLMProvider
 from app.services.movements import sigma_multiple
 
 logger = get_logger(__name__)
@@ -175,7 +175,7 @@ async def _ensure_data(
     ticker: Ticker | None,
     symbol: str,
     background: BackgroundTasks,
-    llm: LLMClient,
+    llm: LLMProvider,
     *,
     refresh: bool,
     wait: bool,

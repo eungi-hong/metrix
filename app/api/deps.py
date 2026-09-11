@@ -12,7 +12,7 @@ from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
-from app.services.llm import LLMClient, get_llm_client
+from app.services.llm import LLMProvider, get_llm_client
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
-LLMDep = Annotated[LLMClient, Depends(get_llm_client)]
+LLMDep = Annotated[LLMProvider, Depends(get_llm_client)]

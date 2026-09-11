@@ -38,7 +38,7 @@ class NewsProviderError(UpstreamError):
 
 
 class LLMError(UpstreamError):
-    """Anthropic call failed, or returned something unparseable."""
+    """An LLM call failed, or returned something unparseable."""
 
 
 class ConfigurationError(MetrixError):

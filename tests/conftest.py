@@ -25,7 +25,7 @@ from app.db.session import get_session
 from app.main import create_app
 from app.services import ingestion
 from app.services import prices as price_service
-from app.services.llm import LLMClient, get_llm_client
+from app.services.llm import LLMProvider, get_llm_client
 from app.services.peers import PeerSet
 from app.services.prices import PriceBarData, PriceHistory, TickerProfile
 from app.services.relevance import ArticleAssessment, RelevanceReport
@@ -36,15 +36,17 @@ START = date(2024, 1, 2)
 # --------------------------------------------------------------------- stubs
 
 
-class StubLLM(LLMClient):
-    """Deterministic stand-in for Claude.
+class StubLLM(LLMProvider):
+    """Deterministic stand-in for a real provider.
 
     Returns a valid instance of whatever schema it is asked for, and records
     every call so tests can assert on what the pipeline actually sent.
     """
 
+    name = "stub"
+
     def __init__(self) -> None:
-        super().__init__(api_key="test-key", model="stub-model")
+        self.model = "stub-model"
         self.structured_calls: list[dict[str, Any]] = []
         self.complete_calls: list[dict[str, Any]] = []
         self.answer = "The move was driven by the reported earnings miss [M1] [A1]."

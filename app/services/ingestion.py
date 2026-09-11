@@ -45,7 +45,7 @@ from app.models.enums import IngestStatus, NewsStatus
 from app.models.market import Movement, PriceBar, Ticker
 from app.models.news import MovementNewsLink, NewsArticle, url_fingerprint
 from app.services import prices as price_service
-from app.services.llm import LLMClient, get_llm_client
+from app.services.llm import LLMProvider, get_llm_client
 from app.services.movements import DailyReturn, DetectionParams, detect_movements
 from app.services.news import NewsProvider, build_news_provider
 from app.services.news.base import NewsCandidate, within_window
@@ -165,7 +165,7 @@ async def ingest_ticker(
     session: AsyncSession,
     symbol: str,
     *,
-    llm: LLMClient | None = None,
+    llm: LLMProvider | None = None,
     news_provider: NewsProvider | None = None,
 ) -> IngestResult:
     """Run the full pipeline for `symbol`. Assumes the caller holds the claim."""
@@ -344,7 +344,7 @@ async def _enrich_movement(
     movement: Movement,
     peers: PeerSet,
     news_provider: NewsProvider,
-    llm: LLMClient,
+    llm: LLMProvider,
     result: IngestResult,
 ) -> int:
     """Search, score, and link news for one movement. Never raises."""
@@ -494,7 +494,7 @@ async def _link(
             relevance_score=item.score,
             rationale=item.rationale,
             search_tier=item.search_tier,
-            scored_by=settings.anthropic_model,
+            scored_by=item.scored_by,
         )
     )
     await session.flush()

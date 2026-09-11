@@ -30,7 +30,7 @@ from app.core.config import settings
 from app.core.errors import LLMError, MetrixError
 from app.core.logging import get_logger
 from app.models.market import Ticker
-from app.services.llm import LLMClient
+from app.services.llm import LLMProvider
 
 logger = get_logger(__name__)
 
@@ -59,7 +59,7 @@ class PeerSet(BaseModel):
 
 
 async def resolve_peers(
-    session: AsyncSession, ticker: Ticker, llm: LLMClient
+    session: AsyncSession, ticker: Ticker, llm: LLMProvider
 ) -> PeerSet:
     """Peers for `ticker`, from cache when fresh, otherwise from the LLM."""
     if _cache_is_fresh(ticker):
@@ -85,7 +85,7 @@ async def resolve_peers(
     return peer_set
 
 
-async def _resolve_via_llm(ticker: Ticker, llm: LLMClient) -> PeerSet:
+async def _resolve_via_llm(ticker: Ticker, llm: LLMProvider) -> PeerSet:
     descriptor = ", ".join(
         part
         for part in (

@@ -27,6 +27,7 @@ async def health(session: SessionDep) -> dict[str, object]:
         "news_provider_configured": (
             settings.news_provider == "fixture" or bool(settings.exa_api_key)
         ),
+        "llm_provider": settings.llm_provider,
         "llm_configured": get_llm_client().available,
         "movement_detection": {
             "window": settings.movement_std_window,
