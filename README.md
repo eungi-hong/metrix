@@ -112,6 +112,7 @@ second flat list you have to join:
 | `min_magnitude_pct` | Minimum move size **in percent** — `5` means 5% |
 | `direction` | `up` or `down` |
 | `tier` | `easy`, `medium`, `hard`. Repeat for several. Restricts both which movements are returned and which articles are shown under them |
+| `include_prices` | Include the daily OHLCV bars themselves, not just the summary. Honours `start`/`end`. Off by default — a year is ~250 rows most callers don't need |
 | `limit`, `offset` | Pagination over movements (`total` is the unpaginated count) |
 | `refresh` | Force re-ingestion even if data is fresh |
 | `wait` | Run any needed ingestion inline instead of in the background |
@@ -122,6 +123,11 @@ curl "http://localhost:8000/tickers/NVDA?start=2026-01-01&direction=down&min_mag
 
 # Second page of everything explained by company-specific or industry news
 curl "http://localhost:8000/tickers/NVDA?tier=easy&tier=medium&limit=10&offset=10"
+```
+
+```bash
+# The price series, for charting
+curl "http://localhost:8000/tickers/NVDA?include_prices=true&limit=0" | jq '.prices[:3]'
 ```
 
 ### Chat
@@ -155,6 +161,59 @@ curl -X POST http://localhost:8000/chat -H 'content-type: application/json' \
 The answer cites `[M3]`/`[A2]` labels that map to the `sources` block, so every claim
 traces back to a row in the database. If nothing relevant is stored, `grounded` is
 `false` and the model is instructed to say so rather than speculate.
+
+---
+
+## Reading it in a terminal
+
+The JSON is nested three levels deep — movement, then the articles explaining it,
+then each article's tier, score and rationale — which is the point of the product and
+also unreadable as raw output. `scripts/show.py` renders the same payload as a tree:
+
+```bash
+scripts/show.py DHI                                    # movements + their news
+scripts/show.py DHI --tier hard                        # macro explanations only
+scripts/show.py DHI --direction down --min-pct 4
+scripts/show.py NVDA --wait                            # ingest inline if cold
+scripts/show.py DHI --ask "what drove the biggest drop?"
+```
+
+```
+D.R. Horton, Inc.  DHI
+Consumer Cyclical · Residential Construction · NYSE · USD
+251 bars  2025-09-11 → 2026-09-10  █▆▆▇▃▄▄▃▂▁▂▅▃▄▂▂▄▄▃▄▅▆▅▃▁▁▁▂  178.86 → 135.57
+ready · 22 movement(s), showing 3
+
+  2026-06-11  ▲ +5.26%  2.4σ  bar 4.40% (volatility)
+    ├─ medium 0.55  prnewswire.com · 2026-06-11
+    │  Lennar Reports Second Quarter 2026 Results
+    │  → Lennar's Q2 results would be read as a positive read-through for peer
+    │    DHI, published on T+0 during the move.
+    └─ hard   0.45  apnews.com · 2026-06-11
+       US stocks jump, and oil prices ease on hopes for a deal...
+       → Broad market rally (S&P 500 +1.8%) driven by Iran deal hopes and easing
+         oil prices, which could explain part of DHI's move as a tailwind.
+```
+
+It is a **client of the HTTP API**, not a database shortcut — so if something is
+awkward to render, the API shape is wrong. That is how the missing price series got
+noticed.
+
+**On colour.** Only the 16 basic ANSI colours are used, never 256-colour or truecolour:
+those hardcode RGB values that fight the user's terminal theme, whereas the basic codes
+are re-mapped by the terminal to whatever the user's scheme says. Colour is applied by
+*semantic role* (`tier_hard`, `down`) defined in one table, so re-theming is one edit.
+
+Colour is never the only signal — direction also carries a glyph and a sign, tiers are
+spelled out, and scores are printed as numbers. It obeys `NO_COLOR`, `TERM=dumb`, and
+`--color auto|always|never`, and `auto` switches off when stdout is not a terminal, so
+piping gives clean text:
+
+```bash
+scripts/show.py DHI | less        # no escape sequences
+NO_COLOR=1 scripts/show.py DHI
+scripts/show.py DHI --json | jq   # raw payload passthrough
+```
 
 ---
 
@@ -367,7 +426,7 @@ holding process dies (a claim older than 15 minutes can be re-taken).
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                      # 52 tests, no Docker, no network, no API keys
+pytest                      # 110 tests, no Docker, no network, no API keys
 ```
 
 - `tests/test_movements.py` — 30 tests on the detection math: the floor, the sigma
@@ -377,6 +436,10 @@ pytest                      # 52 tests, no Docker, no network, no API keys
 - `tests/test_api.py` — a smoke test per endpoint plus filtering, pagination, the
   202/200 ingestion states, idempotent re-ingestion, the concurrency claim, error
   mapping, and multi-turn chat.
+- `tests/test_news.py` — window enforcement, URL-normalized deduplication, and the
+  read-through response cache.
+- `tests/test_show_cli.py` — the renderer's citation parsing, colour gating, and
+  sparkline edge cases.
 
 Endpoint tests run on in-memory SQLite with the news provider and LLM stubbed, so
 `pytest` is one command with no dependencies. The models are declared portably

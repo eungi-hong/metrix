@@ -18,6 +18,26 @@ from app.models.enums import Direction, IngestStatus, NewsStatus, RelevanceTier
 IngestState = Literal["ready", "ingesting", "refreshing", "failed"]
 
 
+class PriceBarOut(BaseModel):
+    """One daily OHLCV bar.
+
+    Returned only when `include_prices=true`: a year of bars is ~250 rows, which
+    would quadruple the size of every movement query that does not need them.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    date: date
+    open: float | None
+    high: float | None
+    low: float | None
+    close: float | None
+    adj_close: float = Field(
+        description="Split- and dividend-adjusted close. Returns are computed from this."
+    )
+    volume: int | None
+
+
 class ArticleOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -90,6 +110,8 @@ class TickerOut(BaseModel):
 
 
 class PriceRangeOut(BaseModel):
+    """Summary of the stored price history, always present."""
+
     start: date | None
     end: date | None
     bars: int
@@ -123,6 +145,11 @@ class TickerDetailOut(BaseModel):
     ingest_status: IngestStatus
     last_ingested_at: datetime | None
     price_range: PriceRangeOut
+    prices: list[PriceBarOut] | None = Field(
+        default=None,
+        description="The daily bars themselves, honouring `start`/`end`. "
+        "Present only when requested with `include_prices=true`.",
+    )
     filters: AppliedFiltersOut
     pagination: PaginationOut
     movements: list[MovementOut]

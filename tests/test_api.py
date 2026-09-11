@@ -350,3 +350,56 @@ async def test_an_old_failure_is_retried_rather_than_reported(client, session_fa
     assert response.status_code == 202
     assert response.json()["status"] == "ingesting"
     assert client.scheduled_ingestions == ["STALE"]
+
+
+# ------------------------------------------------------------- price series
+
+
+async def test_prices_are_not_included_by_default(client):
+    """A year of bars is ~250 rows that most callers do not want."""
+    await client.get("/tickers/TEST", params={"wait": True})
+
+    body = (await client.get("/tickers/TEST")).json()
+
+    assert body["prices"] is None
+    assert body["price_range"]["bars"] == 41
+
+
+async def test_include_prices_returns_the_bars(client):
+    await client.get("/tickers/TEST", params={"wait": True})
+
+    body = (await client.get("/tickers/TEST", params={"include_prices": True})).json()
+
+    assert len(body["prices"]) == 41
+    first = body["prices"][0]
+    assert set(first) == {"date", "open", "high", "low", "close", "adj_close", "volume"}
+    assert isinstance(first["adj_close"], float)
+    assert first["volume"] == 1_000_000
+
+
+async def test_prices_are_returned_in_date_order(client):
+    await client.get("/tickers/TEST", params={"wait": True})
+
+    prices = (
+        await client.get("/tickers/TEST", params={"include_prices": True})
+    ).json()["prices"]
+
+    dates = [bar["date"] for bar in prices]
+    assert dates == sorted(dates)
+
+
+async def test_prices_honour_the_date_filters(client):
+    await client.get("/tickers/TEST", params={"wait": True})
+
+    body = (
+        await client.get(
+            "/tickers/TEST",
+            params={"include_prices": True, "start": "2024-01-10", "end": "2024-01-20"},
+        )
+    ).json()
+
+    dates = [bar["date"] for bar in body["prices"]]
+    assert dates
+    assert all("2024-01-10" <= d <= "2024-01-20" for d in dates)
+    # The summary still describes everything stored, not just the filtered slice.
+    assert body["price_range"]["bars"] == 41

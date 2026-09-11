@@ -27,6 +27,7 @@ from app.schemas.market import (
     LinkedArticleOut,
     MovementOut,
     PaginationOut,
+    PriceBarOut,
     PriceRangeOut,
     TickerDetailOut,
     TickerOut,
@@ -69,6 +70,12 @@ async def get_ticker_detail(
     ),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    include_prices: bool = Query(
+        False,
+        description="Include the daily OHLCV bars themselves, not just a summary. "
+        "Honours `start`/`end`. Off by default because a year of bars is ~250 rows "
+        "that most callers do not need.",
+    ),
     refresh: bool = Query(False, description="Force re-ingestion even if data is fresh."),
     wait: bool = Query(
         False,
@@ -145,6 +152,9 @@ async def get_ticker_detail(
         ingest_status=ticker.ingest_status,
         last_ingested_at=ticker.last_ingested_at,
         price_range=await _price_range(session, ticker),
+        prices=(
+            await _price_bars(session, ticker, start, end) if include_prices else None
+        ),
         filters=AppliedFiltersOut(
             start=start,
             end=end,
@@ -278,6 +288,40 @@ async def _price_range(session: AsyncSession, ticker: Ticker) -> PriceRangeOut:
         )
     ).one()
     return PriceRangeOut(start=row[0], end=row[1], bars=row[2] or 0)
+
+
+async def _price_bars(
+    session: AsyncSession, ticker: Ticker, start: date | None, end: date | None
+) -> list[PriceBarOut]:
+    """The daily bars for a ticker, honouring the same date filters as movements."""
+    conditions: list[sa.ColumnElement[bool]] = [PriceBar.ticker_id == ticker.id]
+    if start:
+        conditions.append(PriceBar.date >= start)
+    if end:
+        conditions.append(PriceBar.date <= end)
+
+    bars = (
+        await session.scalars(
+            sa.select(PriceBar).where(*conditions).order_by(PriceBar.date)
+        )
+    ).all()
+    return [
+        PriceBarOut(
+            date=bar.date,
+            open=_as_float(bar.open),
+            high=_as_float(bar.high),
+            low=_as_float(bar.low),
+            close=_as_float(bar.close),
+            adj_close=float(bar.adj_close),
+            volume=bar.volume,
+        )
+        for bar in bars
+    ]
+
+
+def _as_float(value: object | None) -> float | None:
+    """Prices are stored as NUMERIC; JSON wants a number, not a Decimal string."""
+    return None if value is None else float(value)
 
 
 def _empty_response(symbol: str, state: IngestState, message: str | None) -> TickerDetailOut:
