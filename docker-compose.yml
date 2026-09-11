@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: metrix
+      POSTGRES_PASSWORD: metrix
+      POSTGRES_DB: metrix
+    ports:
+      # 5433 on the host so this does not collide with a Postgres you may
+      # already be running locally. Inside the network it is still 5432.
+      - "5433:5432"
+    volumes:
+      - metrix_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # The API waits for this, so it never races the database on a cold start.
+      test: ["CMD-SHELL", "pg_isready -U metrix -d metrix"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  api:
+    build: .
+    # Keys and tuning come from .env; DATABASE_URL below wins over the one in
+    # that file, so the same .env works on the host and in compose.
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://metrix:metrix@db:5432/metrix
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  metrix_pgdata:
