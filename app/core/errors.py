@@ -50,6 +50,11 @@ class LLMError(UpstreamError):
     """An LLM call failed, or returned something unparseable."""
 
 
+def is_permanent(error: BaseException) -> bool:
+    """Whether retrying could possibly help. See `MetrixError.permanent`."""
+    return isinstance(error, MetrixError) and error.permanent
+
+
 class ConfigurationError(MetrixError):
     """A required API key or setting is missing."""
 

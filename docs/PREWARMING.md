@@ -264,3 +264,50 @@ precision, so a refresh with nothing new writes nothing.
 the model call, and `apply_scoring_result` (report to scored candidates). This mirrors
 the `execute`/`parse` split on news providers. Both halves are pure, so a batch scorer
 can build requests tonight and apply results when the batch returns.
+
+## Demand: what is likely to be asked for
+
+Pre-warming spends its budget on the tickers users are likely to request, and the
+evidence is what they have requested. Every `GET /tickers/{symbol}` records a hit, and
+so does every chat turn that resolves a ticker. Ticker requests are recorded before
+ingestion is decided, so a request for a cold ticker counts; it is committed at once,
+so it does not depend on how the rest of the request goes. A chat turn's hit commits
+with the turn, so a turn whose model call fails does not count. Recording runs in a
+savepoint and is best-effort: a failure is logged and the request carries on.
+
+Popularity is an exponentially decayed hit count. On each hit,
+`score = score · exp(−Δt/τ) + 1` with `τ = DEMAND_HALF_LIFE_DAYS / ln 2`, so a request
+counts half as much a half-life (7 days by default) later. A ticker asked for once a
+day settles around 10.6, and one asked for once a month ago has all but faded. The
+stored score is as of its last update, so readers decay it to the present before
+ranking. Otherwise a ticker hit fifty times two months ago would still outrank one hit
+ten times last month.
+
+On Postgres a hit is a single `INSERT … ON CONFLICT DO UPDATE` that computes the decay
+from the row as it is at write time, so concurrent hits on one symbol all count.
+Elsewhere (SQLite in the tests) it is read, decay in Python, write, which is correct
+there because SQLite serializes writers. Both run in the test suite when Postgres is
+available.
+
+Demand lives in its own `ticker_demand` table, keyed by symbol, rather than in columns
+on `tickers`. It is written on every request, and the ticker row is the one ingestion
+claims. Keeping them apart means a page view never waits on an ingestion holding that
+row. A symbol is also demanded before it has a ticker row, and `tickers.updated_at`
+keeps meaning "the data changed" rather than "someone looked".
+
+### The universe
+
+`select_prewarm_universe` is the union of three sets: the seed symbols
+(`PREWARM_SEED_SYMBOLS` plus the file `PREWARM_SEED_FILE`, by default
+`data/seed_universe.txt`, a hand-picked list of about forty large caps); the
+`PREWARM_TOP_N` most popular tickers by decayed popularity; and anything requested in
+the last `PREWARM_RECENT_DAYS`. Tickers whose last ingestion failed with a permanent
+error are removed, even if seeded. Each entry carries its decayed popularity, for
+prioritising its jobs.
+
+Which failures are permanent is now recorded on the ticker
+(`tickers.ingest_error_permanent`), from the same `permanent` flag the queue uses, and
+it is cleared by the next successful ingestion. A request for a nonsense symbol
+therefore costs one failed ingestion and then drops out of the universe, instead of
+being retried every night. A transient failure keeps its ticker in the universe. Rows
+that failed before this column existed are treated as transient until they fail again.

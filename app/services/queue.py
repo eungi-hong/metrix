@@ -51,7 +51,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
 from app.core.config import settings
-from app.core.errors import MetrixError
+from app.core.errors import is_permanent
 from app.core.logging import get_logger
 from app.models.jobs import (
     ACTIVE_JOB_STATUSES,
@@ -522,11 +522,6 @@ async def _after_terminal(session: AsyncSession, job: Job, now: datetime) -> Non
 
 
 # ------------------------------------------------------- errors and retry
-
-
-def is_permanent(error: BaseException) -> bool:
-    """Whether retrying could possibly help. See `MetrixError.permanent`."""
-    return isinstance(error, MetrixError) and error.permanent
 
 
 def retry_delay(attempts: int, rng: random.Random | None = None) -> timedelta:

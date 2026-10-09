@@ -13,7 +13,6 @@ as everything else. The job's id is returned so the caller can follow it at
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -24,6 +23,7 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import LLMDep, SessionDep
 from app.core.logging import get_logger
+from app.core.symbols import is_valid_symbol, normalize_symbol
 from app.models.enums import Direction, IngestStatus, RelevanceTier
 from app.models.jobs import JobKind, JobSource
 from app.models.market import Movement, PriceBar, Ticker
@@ -40,16 +40,12 @@ from app.schemas.market import (
     TickerDetailOut,
     TickerOut,
 )
-from app.services import ingestion, queue
+from app.services import demand, ingestion, queue
 from app.services.llm import LLMProvider
 from app.services.movements import sigma_multiple
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["tickers"])
-
-# Covers ordinary symbols plus class shares and foreign listings (BRK.B, RY.TO).
-SYMBOL_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9.\-]{0,11}$")
-
 
 @router.get(
     "/tickers/{symbol}",
@@ -91,14 +87,20 @@ async def get_ticker_detail(
         "a first request against a cold ticker.",
     ),
 ) -> TickerDetailOut:
-    symbol = symbol.strip().upper()
-    if not SYMBOL_PATTERN.match(symbol):
+    symbol = normalize_symbol(symbol)
+    if not is_valid_symbol(symbol):
         raise HTTPException(
             status_code=422,
             detail=f"'{symbol}' is not a valid ticker symbol.",
         )
     if start and end and start > end:
         raise HTTPException(status_code=422, detail="`start` must be on or before `end`.")
+
+    # Before anything that can fail: a request for a ticker that turns out to
+    # be cold or broken is still demand. Best-effort, and committed at once so
+    # it does not depend on how the rest of the request goes.
+    await demand.record_demand(session, symbol)
+    await session.commit()
 
     ticker = await ingestion.get_ticker(session, symbol)
     ensured = await _ensure_data(session, ticker, symbol, llm, refresh=refresh, wait=wait)

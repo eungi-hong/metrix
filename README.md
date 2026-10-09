@@ -403,12 +403,13 @@ app/
     ingestion.py  orchestration: refresh_prices (bars → movements), then
                   enrich_movement (news → scores → links) per movement
     queue.py      the Postgres job queue: enqueue/dedupe, claim, retry, reap
+    demand.py     decayed popularity per symbol, and the nightly pre-warm universe
     job_handlers.py  what each kind of queued job does
     chat.py       retrieval, prompt assembly, citation labels
     llm/          provider abstraction, Anthropic adapter, uniform error mapping
   models/         SQLAlchemy: tickers, price_history, movements, news_articles,
                   movement_news_links, news_query_cache, conversations, chat_messages,
-                  jobs, prewarm_runs
+                  jobs, prewarm_runs, ticker_demand
   worker.py       `python -m app.worker`: claim loops, heartbeats, graceful shutdown
   schemas/        Pydantic request/response models
   core/           config (all tunables), logging, domain exceptions
@@ -520,6 +521,8 @@ No Docker, no network, no API keys.
   rebase.
 - `tests/test_relevance.py` — the scoring request and result, built and applied
   without the model in between.
+- `tests/test_demand.py` — popularity decay, recording hits, and choosing the pre-warm
+  universe (seeds, most popular, recently requested, minus permanent failures).
 - `tests/test_show_cli.py` — the renderer's citation parsing, colour gating, and
   sparkline edge cases.
 

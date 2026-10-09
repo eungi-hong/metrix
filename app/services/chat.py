@@ -39,6 +39,7 @@ from app.schemas.chat import (
     ChatSources,
     MovementSource,
 )
+from app.services import demand
 from app.services.llm import LLMProvider
 
 logger = get_logger(__name__)
@@ -85,6 +86,9 @@ async def answer_question(
     conversation = await _load_or_create_conversation(session, request.conversation_id)
 
     ticker = await _resolve_ticker(session, request, conversation)
+    if ticker is not None:
+        # Persisted with this turn's commit; a turn that fails does not count.
+        await demand.record_demand(session, ticker.symbol)
     context = await _retrieve(session, ticker, request.start, request.end)
 
     history = await _load_history(session, conversation)

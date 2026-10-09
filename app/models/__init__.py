@@ -6,6 +6,7 @@ configures relationships, and so Alembic autogenerate sees the full metadata.
 
 from app.db.base import Base
 from app.models.chat import ChatMessage, Conversation
+from app.models.demand import TickerDemand
 from app.models.enums import (
     Direction,
     IngestStatus,
@@ -43,6 +44,7 @@ __all__ = [
     "PriceBar",
     "RelevanceTier",
     "Ticker",
+    "TickerDemand",
     "normalize_url",
     "url_fingerprint",
 ]

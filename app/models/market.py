@@ -44,6 +44,12 @@ class Ticker(Base, TimestampMixin):
         nullable=False,
     )
     ingest_error: Mapped[str | None] = mapped_column(sa.Text)
+    # Whether that error can never succeed on a retry (an unknown symbol, a
+    # rejected key). Pre-warming skips such tickers instead of paying for the
+    # same failure every night.
+    ingest_error_permanent: Mapped[bool] = mapped_column(
+        sa.Boolean, default=False, server_default=sa.false(), nullable=False
+    )
     last_ingested_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     ingest_started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
 

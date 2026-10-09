@@ -22,7 +22,7 @@ from app.core.errors import PriceDataError, TickerNotFoundError
 from app.db.base import Base
 from app.models.enums import IngestStatus, NewsStatus
 from app.models.jobs import Job, JobKind, JobSource, JobStatus
-from app.models.market import Movement
+from app.models.market import Movement, Ticker
 from app.services import ingestion, queue
 from app.services import prices as price_service
 from app.services.news.queries import news_window_closes_at
@@ -134,7 +134,9 @@ async def test_an_unknown_ticker_is_dead_at_once_and_reported_on_the_ticker(db, 
     assert job.attempts == 1
     assert "TickerNotFoundError" in job.last_error
     async with db() as session:
-        assert (await ingestion.get_ticker(session, "NOPE")).ingest_status == IngestStatus.FAILED
+        ticker = await ingestion.get_ticker(session, "NOPE")
+        assert ticker.ingest_status == IngestStatus.FAILED
+        assert ticker.ingest_error_permanent, "so pre-warming stops trying it"
 
 
 async def test_a_transient_failure_is_requeued_with_backoff(db, worker, monkeypatch):
@@ -153,6 +155,23 @@ async def test_a_transient_failure_is_requeued_with_backoff(db, worker, monkeypa
     async with db() as session:
         ticker = await ingestion.get_ticker(session, "FLAKY")
         assert ticker.ingest_status == IngestStatus.FAILED, "the claim is released"
+        assert not ticker.ingest_error_permanent
+
+
+async def test_a_successful_ingestion_clears_a_permanent_failure(db, worker):
+    async with db() as session:
+        session.add(
+            Ticker(symbol="BACK", ingest_status=IngestStatus.FAILED, ingest_error_permanent=True)
+        )
+        await session.commit()
+    await ingest_job(db, "BACK")
+
+    await worker.run_once()
+
+    async with db() as session:
+        ticker = await ingestion.get_ticker(session, "BACK")
+        assert ticker.ingest_status == IngestStatus.COMPLETE
+        assert not ticker.ingest_error_permanent
 
 
 # ---------------------------------------------------------- enrich_movement

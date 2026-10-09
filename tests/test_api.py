@@ -7,6 +7,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import sqlalchemy as sa
 
 from app.models.enums import IngestStatus
 from app.models.jobs import JobKind, JobSource, JobStatus
@@ -446,3 +447,60 @@ async def test_prices_honour_the_date_filters(client):
     assert all("2024-01-10" <= d <= "2024-01-20" for d in dates)
     # The summary still describes everything stored, not just the filtered slice.
     assert body["price_range"]["bars"] == 41
+
+
+# ------------------------------------------------------------------- demand
+
+
+async def demand_for(session_factory, symbol: str):
+    from app.models.demand import TickerDemand
+
+    async with session_factory() as session:
+        return await session.get(TickerDemand, symbol)
+
+
+async def test_a_ticker_request_records_demand(client, session_factory):
+    await client.get("/tickers/cold")
+    await client.get("/tickers/COLD")
+
+    row = await demand_for(session_factory, "COLD")
+    assert row.request_count == 2
+    assert row.popularity == pytest.approx(2.0, rel=1e-3)
+
+
+async def test_an_unknown_ticker_still_counts_as_demand(client, session_factory, monkeypatch):
+    """Recorded before ingestion fails; the universe drops it once the failure
+    is known to be permanent."""
+
+    async def not_found(symbol: str, days=None):
+        raise TickerNotFoundError(symbol)
+
+    monkeypatch.setattr(price_service, "fetch_price_history", not_found)
+    assert (await client.get("/tickers/NOPE", params={"wait": True})).status_code == 404
+
+    assert (await demand_for(session_factory, "NOPE")).request_count == 1
+    async with session_factory() as session:
+        ticker = await ingestion.get_ticker(session, "NOPE")
+        assert ticker.ingest_error_permanent is True
+
+
+async def test_an_invalid_symbol_is_not_demand(client, session_factory):
+    assert (await client.get("/tickers/$$$")).status_code == 422
+    assert await demand_for(session_factory, "$$$") is None
+
+
+async def test_a_chat_turn_that_resolves_a_ticker_records_demand(client, session_factory):
+    await client.get("/tickers/TEST", params={"wait": True})
+    await client.post("/chat", json={"ticker": "TEST", "question": "Why?"})
+    await client.post("/chat", json={"question": "What happened to Test Industries?"})
+
+    assert (await demand_for(session_factory, "TEST")).request_count == 3
+
+
+async def test_a_chat_turn_without_a_ticker_records_nothing(client, session_factory):
+    from app.models.demand import TickerDemand
+
+    await client.post("/chat", json={"question": "Why did something move?"})
+
+    async with session_factory() as session:
+        assert (await session.scalars(sa.select(TickerDemand))).all() == []

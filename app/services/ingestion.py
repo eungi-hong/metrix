@@ -63,6 +63,7 @@ from app.core.errors import (
     NewsProviderError,
     PriceDataError,
     TickerNotFoundError,
+    is_permanent,
 )
 from app.core.logging import get_logger
 from app.models.enums import IngestStatus, NewsStatus
@@ -240,9 +241,10 @@ async def ingest_ticker(
 
     try:
         history = await price_service.fetch_price_history(symbol)
-    except (TickerNotFoundError, PriceDataError):
+    except (TickerNotFoundError, PriceDataError) as exc:
         ticker.ingest_status = IngestStatus.FAILED
         ticker.ingest_error = "price history unavailable"
+        ticker.ingest_error_permanent = is_permanent(exc)
         await session.commit()
         raise
 
@@ -283,6 +285,7 @@ async def ingest_ticker(
 
     ticker.ingest_status = IngestStatus.COMPLETE
     ticker.ingest_error = None
+    ticker.ingest_error_permanent = False
     ticker.last_ingested_at = datetime.now(timezone.utc)
     await session.commit()
 
@@ -758,6 +761,7 @@ async def mark_ingestion_failed(
     if ticker is not None:
         ticker.ingest_status = IngestStatus.FAILED
         ticker.ingest_error = str(error)[:500]
+        ticker.ingest_error_permanent = is_permanent(error)
         await session.commit()
 
 

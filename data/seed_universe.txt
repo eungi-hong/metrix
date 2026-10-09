@@ -1,0 +1,55 @@
+# Symbols pre-warmed every night whether or not anyone has asked for them yet,
+# so the first visitor finds the obvious names already warm. Hand-picked large
+# US caps across sectors -- not an index membership list. Edit freely; one
+# symbol per line, '#' starts a comment. Use yfinance's spelling (BRK-B, not
+# BRK.B). Read from PREWARM_SEED_FILE; PREWARM_SEED_SYMBOLS adds more.
+
+# Technology / communication
+AAPL
+MSFT
+NVDA
+GOOGL
+META
+AVGO
+ORCL
+CRM
+AMD
+ADBE
+CSCO
+INTC
+QCOM
+IBM
+NFLX
+
+# Consumer
+AMZN
+TSLA
+WMT
+COST
+HD
+PG
+KO
+PEP
+MCD
+NKE
+DIS
+
+# Financials
+JPM
+BAC
+GS
+V
+MA
+
+# Health care
+LLY
+UNH
+JNJ
+ABBV
+MRK
+
+# Energy / industrials
+XOM
+CVX
+CAT
+BA

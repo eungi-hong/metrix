@@ -149,6 +149,33 @@ class Settings(BaseSettings):
         default=30, ge=1, description="TTL for the LLM-resolved competitor list."
     )
 
+    # ------------------------------------------------- demand and universe
+    demand_half_life_days: float = Field(
+        default=7.0,
+        gt=0,
+        description="Half-life of a ticker's popularity: a request counts half "
+        "as much this many days later.",
+    )
+    prewarm_seed_symbols: str = Field(
+        default="",
+        description="Comma-separated symbols always pre-warmed, demand or not.",
+    )
+    prewarm_seed_file: str = Field(
+        default="data/seed_universe.txt",
+        description="Optional file of seed symbols, one per line; '#' starts a "
+        "comment. Missing is fine.",
+    )
+    prewarm_top_n: int = Field(
+        default=200,
+        ge=0,
+        description="Most popular tickers (by decayed popularity) pre-warmed nightly.",
+    )
+    prewarm_recent_days: int = Field(
+        default=14,
+        ge=0,
+        description="Anything requested within this many days is pre-warmed too.",
+    )
+
     # ---------------------------------------------------------- job queue
     job_max_attempts: int = Field(
         default=3,
