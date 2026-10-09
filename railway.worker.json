@@ -1,0 +1,29 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "Dockerfile",
+    "watchPatterns": [
+      "/app/**",
+      "/alembic/**",
+      "/alembic.ini",
+      "/data/**",
+      "/scripts/**",
+      "/requirements.txt",
+      "/Dockerfile",
+      "/docker-entrypoint.sh",
+      "/railway.worker.json"
+    ]
+  },
+  "deploy": {
+    "startCommand": "python -m app.worker",
+    "preDeployCommand": ["python scripts/wait_for_migrations.py --timeout 840"],
+    "preDeployTimeoutSeconds": 900,
+    "healthcheckPath": null,
+    "numReplicas": 1,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10,
+    "drainingSeconds": 45,
+    "sleepApplication": false
+  }
+}
