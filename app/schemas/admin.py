@@ -145,3 +145,16 @@ class KeyOut(BaseModel):
 
 class KeyCreated(KeyOut):
     key: str = Field(description="The API key. Shown this once; only its hash is stored.")
+
+
+class RequestInfo(BaseModel):
+    peer: str | None = Field(description="The socket peer: the last proxy, behind one.")
+    x_forwarded_for: str | None
+    hops: list[str] = Field(description="X-Forwarded-For split, leftmost (client-written) first.")
+    x_real_ip: str | None
+    forwarded: str | None
+    trusted_proxy_count: int
+    client_ip: str = Field(description="Who this request counts as under the current setting.")
+    client_ip_by_trusted_count: dict[int, str] = Field(
+        description="Who it would count as with TRUSTED_PROXY_COUNT set to each value."
+    )

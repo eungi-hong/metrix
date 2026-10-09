@@ -1,5 +1,6 @@
 """Tests for running behind a host rather than docker compose: database URLs
-in the forms hosts hand out, and CORS for preview deployments."""
+in the forms hosts hand out, CORS for preview deployments, and the admin view
+of the proxy headers that TRUSTED_PROXY_COUNT is measured with."""
 
 from __future__ import annotations
 
@@ -97,3 +98,47 @@ async def test_no_cors_headers_by_default(monkeypatch):
 def test_an_invalid_origin_regex_fails_at_startup():
     with pytest.raises(ValidationError, match="CORS_ALLOWED_ORIGIN_REGEX"):
         Settings(cors_allowed_origin_regex="^https://(metrix")
+
+
+# ---------------------------------------------------- proxy diagnostics
+
+
+async def request_info(headers: dict[str, str]):
+    """GET /admin/request-info as if the socket peer were the host's proxy."""
+    transport = ASGITransport(app=create_app(), client=("10.0.0.7", 51000))
+    async with AsyncClient(transport=transport, base_url="http://test") as http:
+        return await http.get("/admin/request-info", headers=headers)
+
+
+@pytest.fixture
+def admin_token(monkeypatch):
+    monkeypatch.setattr(settings, "admin_token", "s3cret")
+
+
+@pytest.mark.parametrize("headers", [{}, {"X-Admin-Token": "wrong"}])
+async def test_request_info_needs_the_admin_token(admin_token, headers):
+    response = await request_info({**headers, "X-Forwarded-For": "1.2.3.4"})
+    assert response.status_code == 401
+    assert "1.2.3.4" not in response.text
+
+
+async def test_request_info_is_off_while_no_admin_token_is_set(monkeypatch):
+    monkeypatch.setattr(settings, "admin_token", None)
+    assert (await request_info({"X-Forwarded-For": "1.2.3.4"})).status_code == 503
+
+
+async def test_request_info_shows_the_peer_and_each_candidate_client(admin_token, monkeypatch):
+    monkeypatch.setattr(settings, "trusted_proxy_count", 1)
+    response = await request_info(
+        {"X-Admin-Token": "s3cret", "X-Forwarded-For": "6.6.6.6, 203.0.113.9", "X-Real-IP": "203.0.113.9"}
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["peer"] == "10.0.0.7"
+    assert body["hops"] == ["6.6.6.6", "203.0.113.9"]
+    assert body["x_real_ip"] == "203.0.113.9"
+    assert body["trusted_proxy_count"] == 1
+    assert body["client_ip"] == "203.0.113.9"  # the forged 6.6.6.6 is ignored
+    assert body["client_ip_by_trusted_count"] == {"0": "10.0.0.7", "1": "203.0.113.9", "2": "6.6.6.6"}
+    assert "s3cret" not in response.text

@@ -15,6 +15,7 @@ POST   /admin/users/{id}/keys  issue an API key; DELETE /admin/keys/{id} to revo
 POST   /admin/prewarm          start a pre-warm run now
 GET    /admin/queue            queue health and the last run
 GET    /admin/usage            the day's spend, by provider, operation and user
+GET    /admin/request-info     the peer and X-Forwarded-For as received, to set TRUSTED_PROXY_COUNT
 ```
 
 Everything except `/health` needs a key: `Authorization: Bearer mtx_...` for the API,
