@@ -219,6 +219,41 @@ with an `event` field, which the log search can filter on. Events worth knowing:
 `GET /admin/usage` and `GET /admin/queue` are the dashboards. Both need the
 `X-Admin-Token` header.
 
+## Smoke test
+
+`scripts/smoke.py` checks the live deployment end to end and prints one PASS, FAIL or
+SKIP line per check: `/health` reports Postgres, Redis and both providers ready; a
+pre-warmed ticker (NVDA) has movements with linked news; a keyless request for a
+cold ticker (CLX) is refused with a 429 on `cold_ingests_per_day`; an unlisted symbol
+(ZZZZQ) is a 404 from the symbol directory; one chat turn with the demo key gets an
+answer; and a CORS preflight from the frontend's origin is allowed while one from
+`https://evil.example` is not. Run it after a deploy, or whenever something looks off.
+
+Everything but the chat turn is keyless and free: the cold ticker is refused before
+any provider is called, and the fake one before that. The chat turn is the one paid
+call, and is skipped without a key. The key is only sent with that request and is
+never printed.
+
+Locally, from a checkout with `requirements.txt` installed:
+
+```bash
+METRIX_URL=https://<api-domain> METRIX_API_KEY=mtx_... \
+METRIX_FRONTEND_ORIGIN=https://metrix.vercel.app python scripts/smoke.py
+```
+
+`METRIX_URL` is required; leave out `METRIX_API_KEY` to skip chat, and
+`METRIX_FRONTEND_ORIGIN` to skip CORS. `METRIX_WARM_SYMBOL`, `METRIX_COLD_SYMBOL` and
+`METRIX_FAKE_SYMBOL` change the tickers. The cold one must be a US listing nothing has
+stored: once anyone with a key has fetched CLX, the API serves its stored data with
+a warning instead of refusing, the check fails and says so, and another symbol is
+needed. It exits 1 if any check fails.
+
+From GitHub, run **Actions > Smoke > Run workflow** (`.github/workflows/smoke.yml`).
+It runs only when started by hand, never on push, so Railway's **Wait for CI** does
+not wait for it. It needs two repository secrets, `METRIX_URL` (the API's public URL)
+and `METRIX_DEMO_KEY` (the demo key, passed as `METRIX_API_KEY`), and one repository
+variable, `METRIX_FRONTEND_ORIGIN` (the Vercel production origin, no trailing slash).
+
 ## Cost
 
 As of 2026-10-09, from each provider's pricing page:
