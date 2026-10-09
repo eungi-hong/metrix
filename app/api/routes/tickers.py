@@ -214,10 +214,14 @@ async def _ensure_data(
         )
 
     if wait:
-        result = await ingestion.ingest_ticker(session, symbol, llm=llm)
+        result = await ingestion.ingest_ticker(
+            session, symbol, llm=llm, retry_exhausted=refresh
+        )
         return "ready", None, result.warnings
 
-    background.add_task(ingestion.run_ingestion_in_background, symbol)
+    background.add_task(
+        ingestion.run_ingestion_in_background, symbol, retry_exhausted=refresh
+    )
     if has_data:
         return (
             "refreshing",

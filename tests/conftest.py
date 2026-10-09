@@ -208,7 +208,7 @@ async def client(
     # tests that exercise the async path assert on the response, not the task.
     scheduled: list[str] = []
 
-    async def fake_background(symbol: str) -> None:
+    async def fake_background(symbol: str, **kwargs: Any) -> None:
         scheduled.append(symbol)
 
     monkeypatch.setattr(ingestion, "run_ingestion_in_background", fake_background)

@@ -219,6 +219,7 @@ def render_movement(movement: dict[str, Any], c: Palette, width: int) -> list[st
         note = {
             "failed": "news lookup failed for this movement",
             "pending": "news not fetched yet",
+            "partial": "no news yet; the news window is still open",
         }.get(movement.get("news_status"), "no explanatory news found")
         lines.append(f"    {c('dim', note)}")
         lines.append("")

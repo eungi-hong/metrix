@@ -127,6 +127,17 @@ class Movement(Base, TimestampMixin):
         sa_enum(NewsStatus, "news_status"), default=NewsStatus.PENDING, nullable=False
     )
     news_fetched_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # When the news window stops accepting new articles (window end plus
+    # NEWS_WINDOW_GRACE_HOURS). Enrichment that runs before this instant leaves
+    # the movement PARTIAL rather than COMPLETE.
+    news_window_closes_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), nullable=False
+    )
+    # Every enrichment attempt, successful or not. Caps automatic retries of a
+    # movement that keeps failing, so it stops costing money on every run.
+    news_attempts: Mapped[int] = mapped_column(
+        sa.Integer, default=0, server_default="0", nullable=False
+    )
 
     ticker: Mapped[Ticker] = relationship(back_populates="movements", lazy="noload")
     news_links: Mapped[list["MovementNewsLink"]] = relationship(

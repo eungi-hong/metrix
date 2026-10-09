@@ -302,10 +302,12 @@ movement (`T-3` to `T+1` by default):
 | **Medium** | What happened to its competitors or industry? | a peer's results, sector pricing, supply/demand shifts |
 | **Hard** | What happened to the market? | rate decisions, inflation data, tariffs, regulation, geopolitics |
 
-The Hard-tier query deliberately **names no company** — only the sector. That is what
+The Hard-tier search deliberately **names no company** — only the sector. That is what
 makes the tier work at all (a Fed decision article never mentions NVIDIA), and it means
-every ticker in a sector on a given date produces an identical query and shares one
-cached search.
+every ticker in a sector on a given date produces an identical request and shares one
+cached search. "Identical" covers every field the cache key hashes, including the
+question Exa summarizes each result against: the Easy and Medium summaries ask about
+this company's move, the Hard summary only asks what would move the sector.
 
 Competitors for the Medium tier are resolved by asking the LLM, grounded in the
 yfinance `sector`/`industry`, and cached on the ticker row for 30 days. A static
@@ -407,8 +409,14 @@ Re-running for a ticker extends and corrects; it never duplicates.
   tracking parameters stripped), so the same story found by two different tier searches
   becomes one row.
 - Movement→article links carry a uniqueness constraint.
-- A movement whose news enrichment already succeeded is skipped, so a re-run costs no
+- A movement whose news enrichment is `complete` is skipped, so a re-run costs no
   LLM calls for work already done.
+- A movement enriched before its news window closed (the `T+1` day, plus
+  `NEWS_WINDOW_GRACE_HOURS`) is `partial`, not `complete`: articles published later in
+  the window may be missing. It is enriched again once the window has closed, and that
+  pass re-scores the fuller candidate set and replaces the earlier verdict.
+- A movement whose enrichment keeps failing stops being retried automatically after
+  `NEWS_MAX_ATTEMPTS` (default 3) attempts. `?refresh=true` retries it anyway.
 
 ### Failure policy
 
@@ -435,9 +443,11 @@ rather than silently retrying on every poll. `?refresh=true` forces a retry.
 Ingesting a ticker with 24 movements naively would be 72 searches and hundreds of LLM
 calls. What keeps it bounded:
 
-- **Raw provider responses are cached in Postgres** (`news_query_cache`, 24h TTL). The
-  answer for a *past* date window never changes, so re-running during development is
-  free, and sector-mates share their macro searches.
+- **Raw provider responses are cached in Postgres** (`news_query_cache`). Once a date
+  window has closed its answer never changes, so the entry is kept for 90 days
+  (`NEWS_CACHE_CLOSED_WINDOW_TTL_DAYS`); while it is still open, for 2 hours
+  (`NEWS_CACHE_OPEN_WINDOW_TTL_HOURS`) and never past the moment it closes.
+  Re-running during development is free, and sector-mates share their macro searches.
 - **One LLM scoring call per movement**, not per article or per tier.
 - **`MAX_MOVEMENTS_PER_INGEST`** (default 10) caps enrichment per run, largest moves
   first. The response warns how many were skipped; re-running picks up the next batch.

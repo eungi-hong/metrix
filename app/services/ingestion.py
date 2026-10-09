@@ -11,8 +11,20 @@ Re-running for a ticker extends and corrects rather than duplicating. Price
 bars and movements are reconciled against what is already stored (insert new,
 update changed, leave the rest); articles deduplicate on a normalized-URL
 hash; movement/article links carry a uniqueness constraint. A movement whose
-news enrichment already succeeded is not re-enriched, so a re-run costs no
-LLM calls for work already done.
+news enrichment is COMPLETE is not re-enriched, so a re-run costs no LLM calls
+for work already done.
+
+Freshness
+---------
+A movement's news window runs a day past the move, so enrichment that runs
+before the window closes (`Movement.news_window_closes_at`) cannot have seen
+everything. Such a movement is marked PARTIAL, not COMPLETE, and is enriched
+again once the window has closed. Re-enrichment re-scores the fuller candidate
+set from scratch and replaces the previous verdict: links the scorer no longer
+supports are removed, the rest are updated in place.
+
+A movement that keeps failing stops being retried automatically after
+`NEWS_MAX_ATTEMPTS`; only an explicit `refresh=true` tries it again.
 
 Failure policy
 --------------
@@ -52,6 +64,7 @@ from app.services.news.base import NewsCandidate, within_window
 from app.services.news.queries import (
     MovementContext,
     build_tier_queries,
+    news_window_closes_at,
     search_window,
 )
 from app.services.peers import PeerSet, resolve_peers
@@ -104,6 +117,25 @@ def failed_recently(ticker: Ticker) -> bool:
     return datetime.now(timezone.utc) - attempted < timedelta(
         hours=settings.staleness_hours
     )
+
+
+def needs_enrichment(
+    movement: Movement, now: datetime, *, retry_exhausted: bool = False
+) -> bool:
+    """Whether a run should spend news and LLM calls on this movement.
+
+    PARTIAL movements wait for their window to close: re-enriching earlier
+    would pay again for a result that is still provisional. FAILED movements
+    are retried until `NEWS_MAX_ATTEMPTS`, then only when `retry_exhausted`.
+    """
+    status = movement.news_status
+    if status == NewsStatus.COMPLETE:
+        return False
+    if status == NewsStatus.PARTIAL:
+        return now >= _as_utc(movement.news_window_closes_at)
+    if status == NewsStatus.FAILED:
+        return retry_exhausted or movement.news_attempts < settings.news_max_attempts
+    return True
 
 
 async def get_ticker(session: AsyncSession, symbol: str) -> Ticker | None:
@@ -167,8 +199,13 @@ async def ingest_ticker(
     *,
     llm: LLMProvider | None = None,
     news_provider: NewsProvider | None = None,
+    retry_exhausted: bool = False,
 ) -> IngestResult:
-    """Run the full pipeline for `symbol`. Assumes the caller holds the claim."""
+    """Run the full pipeline for `symbol`. Assumes the caller holds the claim.
+
+    `retry_exhausted` also retries movements that have failed
+    `NEWS_MAX_ATTEMPTS` times; it is what `refresh=true` means for news.
+    """
     symbol = symbol.strip().upper()
     llm = llm or get_llm_client()
     news_provider = news_provider or build_news_provider(session)
@@ -194,7 +231,10 @@ async def ingest_ticker(
     result.movements_detected = len(movements)
     await session.commit()
 
-    pending = [m for m in movements if m.news_status != NewsStatus.COMPLETE]
+    now = _now()
+    pending = [
+        m for m in movements if needs_enrichment(m, now, retry_exhausted=retry_exhausted)
+    ]
     budget = sorted(
         pending, key=lambda m: (m.abs_return, m.date), reverse=True
     )[: settings.max_movements_per_ingest]
@@ -325,6 +365,7 @@ async def _upsert_movements(
         movement.detector_k = params.k
         movement.detector_window = params.window
         movement.detector_floor = params.floor
+        movement.news_window_closes_at = news_window_closes_at(item.date)
         kept.append(movement)
 
     # A day that no longer clears the threshold (revised prices, or retuned
@@ -347,7 +388,12 @@ async def _enrich_movement(
     llm: LLMProvider,
     result: IngestResult,
 ) -> int:
-    """Search, score, and link news for one movement. Never raises."""
+    """Search, score, and link news for one movement. Never raises.
+
+    Safe to repeat: articles and links are upserted, and a successful scoring
+    pass replaces whatever the previous pass linked.
+    """
+    movement.news_attempts += 1
     context = MovementContext(
         symbol=ticker.symbol,
         company_name=ticker.company_name,
@@ -365,8 +411,8 @@ async def _enrich_movement(
         return 0
 
     if not candidates:
-        movement.news_status = NewsStatus.COMPLETE
-        movement.news_fetched_at = datetime.now(timezone.utc)
+        # No evidence is not counter-evidence: keep any links an earlier pass made.
+        _mark_enriched(movement)
         return 0
 
     try:
@@ -377,6 +423,7 @@ async def _enrich_movement(
 
     window_start, window_end = search_window(movement.date)
     linked = 0
+    kept_articles: set[int] = set()
     for item in scored:
         article = await _upsert_article(session, item.candidate)
 
@@ -396,13 +443,42 @@ async def _enrich_movement(
             )
             continue
 
+        kept_articles.add(article.id)
         if await _link(session, movement, article, item):
             linked += 1
 
-    movement.news_status = NewsStatus.COMPLETE
-    movement.news_fetched_at = datetime.now(timezone.utc)
+    await _prune_links(session, movement, kept_articles)
+    _mark_enriched(movement)
     await session.flush()
     return linked
+
+
+def _mark_enriched(movement: Movement) -> None:
+    """COMPLETE if the news window had closed when this pass ran, else PARTIAL."""
+    now = _now()
+    closed = now >= _as_utc(movement.news_window_closes_at)
+    movement.news_status = NewsStatus.COMPLETE if closed else NewsStatus.PARTIAL
+    movement.news_fetched_at = now
+
+
+async def _prune_links(
+    session: AsyncSession, movement: Movement, kept_articles: set[int]
+) -> None:
+    """Drop links from an earlier pass that this pass's scorer did not support.
+
+    On re-enrichment the scorer sees a fuller candidate set and ranks the old
+    articles against new ones; an article it now scores below the threshold no
+    longer explains the move as well as the alternatives, and keeping its old
+    link would show a verdict the current pass contradicts.
+    """
+    await session.execute(
+        sa.delete(MovementNewsLink)
+        .where(
+            MovementNewsLink.movement_id == movement.id,
+            MovementNewsLink.article_id.not_in(kept_articles),
+        )
+        .execution_options(synchronize_session=False)
+    )
 
 
 def _record_failure(movement: Movement, result: IngestResult, message: str) -> None:
@@ -484,6 +560,8 @@ async def _link(
         link.relevance_tier = item.tier
         link.relevance_score = item.score
         link.rationale = item.rationale
+        link.search_tier = item.search_tier
+        link.scored_by = item.scored_by
         return False
 
     session.add(
@@ -504,11 +582,13 @@ async def _link(
 # ------------------------------------------------------------ background run
 
 
-async def run_ingestion_in_background(symbol: str) -> None:
+async def run_ingestion_in_background(
+    symbol: str, *, retry_exhausted: bool = False
+) -> None:
     """Entry point for FastAPI BackgroundTasks -- owns its own session."""
     try:
         async with session_scope() as session:
-            await ingest_ticker(session, symbol)
+            await ingest_ticker(session, symbol, retry_exhausted=retry_exhausted)
     except Exception as exc:
         logger.error("background_ingest_failed", symbol=symbol, error=str(exc))
         async with session_scope() as session:
@@ -516,3 +596,13 @@ async def run_ingestion_in_background(symbol: str) -> None:
             if ticker is not None:
                 ticker.ingest_status = IngestStatus.FAILED
                 ticker.ingest_error = str(exc)[:500]
+
+
+def _now() -> datetime:
+    """The clock freshness decisions are made against. A seam for tests."""
+    return datetime.now(timezone.utc)
+
+
+def _as_utc(value: datetime) -> datetime:
+    """SQLite hands back naive datetimes; Postgres hands back aware ones."""
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)

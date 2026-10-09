@@ -209,3 +209,171 @@ async def test_a_deduplicated_article_is_not_linked_outside_its_window(
         links = (await session.scalars(sa.select(MovementNewsLink))).all()
         assert links == [], "an article published outside the window must not be linked"
         assert (await session.scalars(sa.select(Movement))).all(), "movements still detected"
+
+
+# ------------------------------------------------ hard-tier cache sharing
+
+
+def _context(symbol: str, company: str, sector: str = "Technology"):
+    from datetime import date
+
+    from app.services.news.queries import MovementContext
+
+    return MovementContext(
+        symbol=symbol,
+        company_name=company,
+        sector=sector,
+        industry="Widgets",
+        movement_date=date(2026, 7, 2),
+        daily_return=-0.05,
+        direction="down",
+    )
+
+
+def test_hard_tier_requests_are_identical_across_companies_in_a_sector():
+    """Regression: the Hard request carried a company-specific `summary_query`,
+    and the cache key hashes every field, so sector-mates never shared a row."""
+    from app.services.news.queries import build_tier_queries
+    from app.services.peers import PeerSet
+
+    a = dict(build_tier_queries(_context("AAA", "Alpha Corp"), PeerSet()))
+    b = dict(build_tier_queries(_context("BBB", "Beta Inc"), PeerSet()))
+
+    assert a["hard"] == b["hard"]
+    assert a["hard"].cache_fingerprint("exa") == b["hard"].cache_fingerprint("exa")
+    assert "Alpha" not in (a["hard"].summary_query or "")
+    # The company tiers stay company-specific.
+    assert a["easy"].cache_fingerprint("exa") != b["easy"].cache_fingerprint("exa")
+    assert "Alpha Corp" in (a["easy"].summary_query or "")
+
+
+def test_a_different_sector_is_a_different_hard_tier_entry():
+    from app.services.news.queries import build_tier_queries
+    from app.services.peers import PeerSet
+
+    tech = dict(build_tier_queries(_context("AAA", "Alpha"), PeerSet()))["hard"]
+    energy = dict(
+        build_tier_queries(_context("BBB", "Beta", sector="Energy"), PeerSet())
+    )["hard"]
+    assert tech.cache_fingerprint("exa") != energy.cache_fingerprint("exa")
+
+
+async def test_same_sector_tickers_make_one_upstream_hard_tier_call(
+    session, stub_llm, monkeypatch
+):
+    """Two companies, same sector, same movement date: one macro search."""
+    import dataclasses
+
+    from app.services import ingestion
+    from app.services import prices as price_service
+    from tests.conftest import build_price_history
+
+    async def fetch(symbol: str, days: int | None = None):
+        history = build_price_history(symbol)
+        profile = dataclasses.replace(history.profile, company_name=f"{symbol} Holdings")
+        return dataclasses.replace(history, profile=profile)
+
+    monkeypatch.setattr(price_service, "fetch_price_history", fetch)
+
+    calls: list[str] = []
+
+    class CountingProvider(FixtureNewsProvider):
+        async def execute(self, req):
+            calls.append(req.query)
+            return await super().execute(req)
+
+    provider = CachingNewsProvider(CountingProvider(), session)
+    await ingestion.ingest_ticker(session, "AAA", llm=stub_llm, news_provider=provider)
+    await ingestion.ingest_ticker(session, "BBB", llm=stub_llm, news_provider=provider)
+
+    hard = [q for q in calls if q.startswith("macroeconomic")]
+    easy = [q for q in calls if "company news" in q]
+    assert len(hard) == 1, "the second ticker's macro search must come from the cache"
+    assert len(easy) == 2, "company searches are per ticker"
+
+
+# ------------------------------------------------------- cache store race
+
+
+async def test_a_concurrent_insert_of_the_same_key_is_treated_as_a_hit(
+    session, monkeypatch
+):
+    """Two workers miss on the same key and both insert. The loser must not
+    raise, and must not lose the rest of its transaction."""
+    import sqlalchemy as sa
+
+    from app.models.market import Ticker
+    from app.models.news import NewsQueryCache
+
+    cached = CachingNewsProvider(FixtureNewsProvider(), session)
+    await cached.search(request())  # the other worker's row
+    await session.commit()
+
+    # This worker's own pending work, in the same transaction as the insert.
+    session.add(Ticker(symbol="KEEP"))
+    await session.flush()
+
+    async def always_miss(key):
+        return None
+
+    monkeypatch.setattr(cached, "_lookup", always_miss)
+    results = await cached.search(request())  # collides on the unique key
+
+    assert results
+    await session.commit()
+    assert await session.scalar(sa.select(Ticker).where(Ticker.symbol == "KEEP"))
+    assert await session.scalar(sa.select(sa.func.count()).select_from(NewsQueryCache)) == 1
+
+
+# ---------------------------------------------------- window-aware cache TTL
+
+
+def test_a_closed_window_is_cached_for_the_long_ttl(monkeypatch):
+    from app.core.config import settings
+    from app.services.news.cache import cache_expiry
+
+    monkeypatch.setattr(settings, "news_cache_closed_window_ttl_days", 90)
+    now = datetime(2026, 10, 9, 12, tzinfo=timezone.utc)
+    closed = NewsSearchRequest(query="q", start=now - timedelta(days=10), end=now - timedelta(days=5))
+
+    assert cache_expiry(closed, now) == now + timedelta(days=90)
+
+
+def test_an_open_window_is_cached_briefly(monkeypatch):
+    from app.core.config import settings
+    from app.services.news.cache import cache_expiry
+
+    monkeypatch.setattr(settings, "news_cache_open_window_ttl_hours", 2)
+    monkeypatch.setattr(settings, "news_window_grace_hours", 6)
+    now = datetime(2026, 10, 9, 12, tzinfo=timezone.utc)
+    open_ = NewsSearchRequest(query="q", start=now - timedelta(days=3), end=now + timedelta(days=1))
+
+    assert cache_expiry(open_, now) == now + timedelta(hours=2)
+
+
+def test_an_open_window_entry_never_outlives_the_window(monkeypatch):
+    """Cached an hour before closing, the entry must expire at closing, so the
+    first search after it sees the final answer rather than a provisional one."""
+    from app.core.config import settings
+    from app.services.news.cache import cache_expiry
+
+    monkeypatch.setattr(settings, "news_cache_open_window_ttl_hours", 2)
+    monkeypatch.setattr(settings, "news_window_grace_hours", 6)
+    now = datetime(2026, 10, 9, 12, tzinfo=timezone.utc)
+    end = now - timedelta(hours=5)  # closes at now + 1h
+    closing = NewsSearchRequest(query="q", start=end - timedelta(days=4), end=end)
+
+    assert cache_expiry(closing, now) == now + timedelta(hours=1)
+
+
+async def test_the_stored_entry_uses_the_window_aware_expiry(session):
+    import sqlalchemy as sa
+
+    from app.models.news import NewsQueryCache
+
+    cached = CachingNewsProvider(FixtureNewsProvider(), session)
+    await cached.search(request())  # a 2026 window: closed
+
+    row = await session.scalar(sa.select(NewsQueryCache))
+    expires = row.expires_at.replace(tzinfo=timezone.utc)
+    assert expires - datetime.now(timezone.utc) > timedelta(days=30)

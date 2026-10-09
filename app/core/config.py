@@ -98,8 +98,34 @@ class Settings(BaseSettings):
     staleness_hours: int = Field(
         default=24, ge=1, description="Age after which a ticker's data is refetched."
     )
-    news_cache_ttl_hours: int = Field(
-        default=24, ge=1, description="TTL for cached raw news-provider responses."
+    news_window_grace_hours: int = Field(
+        default=6,
+        ge=0,
+        description=(
+            "Hours after the news window's last day ends before it counts as "
+            "closed. Covers late-indexed articles and provider crawl lag."
+        ),
+    )
+    news_max_attempts: int = Field(
+        default=3,
+        ge=1,
+        description=(
+            "Enrichment attempts after which a FAILED movement stops being retried "
+            "automatically. `refresh=true` still retries it."
+        ),
+    )
+    news_cache_closed_window_ttl_days: int = Field(
+        default=90,
+        ge=1,
+        description="TTL for cached news responses whose date window has closed.",
+    )
+    news_cache_open_window_ttl_hours: int = Field(
+        default=2,
+        ge=1,
+        description=(
+            "TTL for cached news responses whose date window is still open, "
+            "so articles published later in the window are picked up."
+        ),
     )
     peers_ttl_days: int = Field(
         default=30, ge=1, description="TTL for the LLM-resolved competitor list."

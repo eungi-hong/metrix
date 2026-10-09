@@ -13,9 +13,11 @@ import hashlib
 import json
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import urlsplit
+
+from app.core.config import settings
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +105,19 @@ class NewsProvider(ABC):
 
     async def aclose(self) -> None:  # pragma: no cover - default no-op
         return None
+
+
+def window_closes_at(window_end: datetime) -> datetime:
+    """The instant after which a search window's answer stops changing.
+
+    The window's last day is not the end of it in practice: providers index
+    articles hours after publication, so a search run at 23:59 on the last day
+    still misses some. `NEWS_WINDOW_GRACE_HOURS` covers that lag. Before this
+    instant a search result is provisional; after it, it is final.
+    """
+    if window_end.tzinfo is None:
+        window_end = window_end.replace(tzinfo=timezone.utc)
+    return window_end + timedelta(hours=settings.news_window_grace_hours)
 
 
 def within_window(

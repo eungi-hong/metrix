@@ -1,8 +1,10 @@
 """Enumerations shared by the ORM models and the Pydantic schemas.
 
-Stored as VARCHAR + CHECK (`native_enum=False`) rather than a Postgres ENUM
+Stored as plain VARCHAR (`native_enum=False`) rather than a Postgres ENUM
 type: adding a value later is a no-op instead of an `ALTER TYPE` migration, and
-the same DDL works on SQLite for tests.
+the same DDL works on SQLite for tests. There is no CHECK constraint either --
+SQLAlchemy 2.0 only emits one with `create_constraint=True` -- so the values
+are enforced by the ORM, not the database.
 """
 
 from __future__ import annotations
@@ -21,7 +23,15 @@ class IngestStatus(StrEnum):
 
 
 class NewsStatus(StrEnum):
+    """Where a movement's news enrichment stands.
+
+    PARTIAL -- enrichment ran, but before the news window closed, so articles
+    published later in the window may be missing. It is re-enriched once the
+    window closes. COMPLETE is reserved for enrichment that ran after that.
+    """
+
     PENDING = "pending"
+    PARTIAL = "partial"
     COMPLETE = "complete"
     FAILED = "failed"
 
