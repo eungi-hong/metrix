@@ -659,10 +659,12 @@ class Settings(BaseSettings):
     @field_validator("database_url")
     @classmethod
     def _require_async_driver(cls, v: str) -> str:
-        if v.startswith("postgresql://"):
-            # Accept the canonical libpq URL and upgrade it, rather than failing
-            # on the most common copy-paste mistake.
-            return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        # Accept the canonical libpq URL and upgrade it, rather than failing
+        # on the most common copy-paste mistake. Some hosts hand out the older
+        # `postgres://` scheme, which SQLAlchemy does not recognise at all.
+        for scheme in ("postgresql://", "postgres://"):
+            if v.startswith(scheme):
+                return "postgresql+asyncpg://" + v[len(scheme):]
         return v
 
 
