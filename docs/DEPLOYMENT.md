@@ -32,14 +32,21 @@ browser ──► Vercel (static Vite build of frontend/)
   is unreachable, both fall back to per-process limits and `limiter_fallback` is
   logged; the API keeps serving.
 
-Two services build the same Dockerfile, each from its own config file in the
-repository root, `railway.api.json` and `railway.worker.json`. Settings in those files
-override the dashboard, so they are the source of truth.
+Two services build the same Dockerfile from the repository root. Their settings live
+on Railway (each service's Settings tab), not in the repository: Railway no longer
+lets a new service read `railway.json` or `railway.toml`, and stops reading those files
+for every service on 2026-12-01. Its replacement, Infrastructure as Code
+(`.railway/railway.ts`), is applied with `railway config apply` rather than on push;
+moving to it is a possible next step. Until then, the values below are the record:
+change a setting on Railway and here together.
 
 ### What each setting is for
 
-api (`railway.api.json`):
+api, which runs the image's own command (uvicorn on `PORT=8080`) and has the public
+domain:
 
+- Dockerfile path `Dockerfile`, pre-deploy timeout 600s, health-check timeout 120s,
+  restart on failure up to 10 times, sleeping off.
 - `preDeployCommand: alembic upgrade head` migrates once per deploy, in a separate
   container, before any new API container starts. If it fails, the deploy stops and
   the previous release keeps serving. Both services set `SKIP_MIGRATIONS=1`, so the
@@ -51,11 +58,13 @@ api (`railway.api.json`):
   replicas would be safe, but a demo does not need them.
 - `drainingSeconds: 30` gives in-flight requests time to finish after SIGTERM.
 
-worker (`railway.worker.json`):
+worker, no public domain:
 
+- Dockerfile path `Dockerfile`, pre-deploy timeout 900s, no health check, restart on
+  failure up to 10 times, sleeping off.
 - `startCommand: python -m app.worker`. Railway runs a start command in exec form in
   place of the image's entrypoint, so the worker is PID 1 and receives SIGTERM itself.
-- `preDeployCommand: python scripts/wait_for_migrations.py` waits until the database
+- `preDeployCommand: python scripts/wait_for_migrations.py --timeout 840` waits until the database
   is at this release's migration head. The worker and the API deploy at the same time
   from the same commit, and only the API migrates, since two concurrent
   `alembic upgrade` runs would race. Without the wait, a new worker could start
@@ -70,10 +79,10 @@ worker (`railway.worker.json`):
   is deduplicated per date), but the spend cap, not the worker count, is the
   bottleneck for a demo.
 
-Both: `watchPatterns` list exactly what the image is built from (`app/`, `alembic/`,
-`data/`, `scripts/`, `requirements.txt`, the Dockerfile and entrypoint, the service's
-own config file). A merge that only touches the frontend or the docs does not restart
-the backend. **If the Dockerfile starts copying something new, add it to both lists**,
+Both: watch paths list exactly what the image is built from: `/app/**`,
+`/alembic/**`, `/alembic.ini`, `/data/**`, `/scripts/**`, `/requirements.txt`,
+`/Dockerfile`, `/docker-entrypoint.sh`. A merge that only touches the frontend or the
+docs does not restart the backend. **If the Dockerfile starts copying something new, add it to both lists**,
 or changes to it will not deploy.
 
 Vercel (`frontend/vercel.json`, plus the project settings): root directory
