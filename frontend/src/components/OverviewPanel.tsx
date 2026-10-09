@@ -12,11 +12,6 @@ export function OverviewPanel({ data }: { data: TickerDetail }) {
   ];
   return (
     <section id="overview-panel" role="tabpanel" aria-labelledby="overview-tab" className="space-y-5 px-5 py-5">
-      <div>
-        <p className="text-sm font-semibold">Large price moves, explained by evidence.</p>
-        <p className="mt-1 text-sm leading-5 text-mute">Metrix links unusual stored price moves with company, industry, and macro reporting. It does not make trading recommendations.</p>
-      </div>
-
       {data.warnings.map((warning) => (
         <div key={warning} className="flex gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-5 text-amber-900">
           <AlertTriangle aria-hidden="true" size={15} className="mt-0.5 shrink-0" />

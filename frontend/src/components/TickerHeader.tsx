@@ -11,8 +11,8 @@ const statusCopy: Record<TickerDetail["status"], string> = {
 
 const statusClass: Record<TickerDetail["status"], string> = {
   ready: "bg-emerald-50 text-emerald-700 ring-emerald-100",
-  refreshing: "bg-violet-50 text-violet-700 ring-violet-100",
-  ingesting: "bg-violet-50 text-violet-700 ring-violet-100",
+  refreshing: "bg-blue-50 text-blue-700 ring-blue-100",
+  ingesting: "bg-blue-50 text-blue-700 ring-blue-100",
   failed: "bg-red-50 text-red-700 ring-red-100",
 };
 

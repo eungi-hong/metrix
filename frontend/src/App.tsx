@@ -46,6 +46,7 @@ export default function App() {
 
   const selectedMovement = useMemo(() => data?.movements.find((movement) => movement.id === selectedMovementId) ?? null, [data, selectedMovementId]);
   const phase = phaseForTicker(data, loading);
+  const jobId = job?.id;
 
   const fetchApiTicker = useCallback(async (nextSymbol: string, refresh = false) => {
     if (!apiKey) {
@@ -82,12 +83,12 @@ export default function App() {
   }, [apiKey, fetchApiTicker, mode]);
 
   useEffect(() => {
-    if (!job || mode !== "api" || !apiKey) return;
+    if (!jobId || mode !== "api" || !apiKey) return;
     let cancelled = false;
     const client = new MetrixApiClient(API_BASE_URL, apiKey);
     const poll = async () => {
       try {
-        const latest = await client.getJob(job.id);
+        const latest = await client.getJob(jobId);
         if (cancelled) return;
         setJob(latest);
         if (latest.status === "succeeded") {
@@ -105,7 +106,7 @@ export default function App() {
     void poll();
     const id = window.setInterval(() => void poll(), 3500);
     return () => { cancelled = true; window.clearInterval(id); };
-  }, [apiKey, fetchApiTicker, job, mode, symbol]);
+  }, [apiKey, fetchApiTicker, jobId, mode, symbol]);
 
   function useDemo() {
     setMode("demo");
@@ -167,7 +168,7 @@ export default function App() {
       {activeTab === "ask" && <ChatPanel messages={messages} isLoading={chatLoading} onSend={sendQuestion} onNewConversation={() => { setMessages([]); setConversationId(undefined); }} onSelectMovement={(movementId) => { const movement = data.movements.find((item) => item.id === movementId); if (movement) selectMovement(movement); }} />}
     </> : <>
       {error ? <ErrorState error={error} onRetry={() => analyze(symbol)} /> : <DemoDataBanner onUseDemo={useDemo} />}
-      <div className="px-5 py-6"><p className="text-sm font-semibold">Start with a stored asset</p><p className="mt-1 text-sm leading-6 text-mute">Search a ticker with your local API key, or use the explicitly labelled NVDA fixture to explore the research workspace.</p></div>
+      <div className="px-5 py-6"><p className="text-sm text-mute">Search a ticker or use demo data.</p></div>
     </>}
     {sourceMessage(data, mode === "demo") && <p className="mt-auto border-t border-line px-5 py-3 text-[11px] text-mute">{sourceMessage(data, mode === "demo")}</p>}
   </div>;

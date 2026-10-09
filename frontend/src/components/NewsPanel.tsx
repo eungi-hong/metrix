@@ -2,10 +2,10 @@ import { ExternalLink, FileSearch, Tag } from "lucide-react";
 import type { Movement } from "../api/types";
 import { shortDate, tierLabel } from "./format";
 
-const tierStyle: Record<string, string> = { easy: "bg-violet-50 text-violet-700", medium: "bg-sky-50 text-sky-700", hard: "bg-amber-50 text-amber-800" };
+const tierStyle: Record<string, string> = { easy: "bg-slate-100 text-slate-700", medium: "bg-slate-100 text-slate-700", hard: "bg-slate-100 text-slate-700" };
 
 export function NewsPanel({ movement }: { movement: Movement | null }) {
-  if (!movement) return <section id="news-panel" role="tabpanel" aria-labelledby="news-tab" className="px-5 py-8 text-center"><FileSearch className="mx-auto text-mute" size={26} /><p className="mt-3 text-sm font-semibold">Select a movement</p><p className="mt-1 text-xs leading-5 text-mute">Its linked evidence will be shown here.</p></section>;
+  if (!movement) return <section id="news-panel" role="tabpanel" aria-labelledby="news-tab" className="px-5 py-8 text-center"><FileSearch className="mx-auto text-mute" size={26} /><p className="mt-3 text-sm font-semibold">Select a movement</p></section>;
   if (!movement.news.length) return <section id="news-panel" role="tabpanel" aria-labelledby="news-tab" className="px-5 py-8 text-center"><FileSearch className="mx-auto text-mute" size={26} /><p className="mt-3 text-sm font-semibold">Evidence is not linked yet</p><p className="mt-1 text-xs leading-5 text-mute">This movement is marked {movement.news_status}. Return after enrichment completes.</p></section>;
   return <section id="news-panel" role="tabpanel" aria-labelledby="news-tab" className="scrollbar-thin max-h-[calc(100vh-260px)] space-y-3 overflow-y-auto px-4 py-4 lg:min-h-[520px]">
     <div className="px-1"><p className="text-sm font-semibold">Evidence for {shortDate(movement.date)}</p><p className="mt-0.5 text-xs text-mute">Source reporting linked to this stored price movement.</p></div>

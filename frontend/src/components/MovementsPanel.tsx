@@ -14,7 +14,7 @@ export function MovementsPanel({ movements, selectedId, onSelect }: {
         const selected = movement.id === selectedId;
         const positive = movement.direction === "up";
         const rationale = movement.news[0]?.rationale;
-        return <button key={movement.id} onClick={() => onSelect(movement)} className={`w-full rounded-xl border p-3 text-left transition-colors ${selected ? "border-violet-200 bg-violet-50/70" : "border-transparent hover:border-line hover:bg-white"}`}>
+        return <button key={movement.id} onClick={() => onSelect(movement)} className={`w-full rounded-xl border p-3 text-left transition-colors ${selected ? "border-blue-200 bg-blue-50/70" : "border-transparent hover:border-line hover:bg-white"}`}>
           <div className="flex items-center gap-2">
             <span className={`grid size-7 shrink-0 place-items-center rounded-full ${positive ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"}`}>{positive ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}</span>
             <div className="min-w-0 flex-1"><div className="flex items-baseline justify-between gap-2"><span className="text-sm font-semibold">{shortDate(movement.date)}</span><span className={`text-sm font-bold ${positive ? "text-emerald-700" : "text-red-700"}`}>{pct(movement.daily_return_pct, true)}</span></div><p className="mt-0.5 truncate text-xs text-mute">{movement.news_status === "complete" ? `${movement.news.length} evidence item${movement.news.length === 1 ? "" : "s"}` : `Evidence ${movement.news_status}`}</p></div>
