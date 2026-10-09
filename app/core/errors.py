@@ -33,6 +33,18 @@ class TickerNotFoundError(MetrixError):
         super().__init__(f"No price data available for ticker '{symbol}'.")
 
 
+class SymbolNotListed(TickerNotFoundError):
+    """Not in the US symbol directory, so refused before any external call."""
+
+    def __init__(self, symbol: str) -> None:
+        self.symbol = symbol
+        MetrixError.__init__(
+            self,
+            f"'{symbol}' is not a listed US symbol. (Foreign listings, such as RY.TO, "
+            "are served only if added to SYMBOL_ALLOWLIST.)",
+        )
+
+
 class UpstreamError(MetrixError):
     """A third-party dependency failed. Usually recoverable / partial."""
 

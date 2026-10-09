@@ -216,6 +216,7 @@ async def test_owed_news_is_charged_once_per_request(session_factory, monkeypatc
 
 
 async def test_refresh_has_its_own_daily_quota(session_factory, monkeypatch):
+    monkeypatch.setattr(settings, "refresh_cooldown_minutes", 0)
     plan(monkeypatch, refresh_per_day=1, cold_ingests_per_day=0)
     await stored_ticker(session_factory, "FRESH", age=timedelta(minutes=5))
     async with await free_client(session_factory) as client:

@@ -183,3 +183,14 @@ async def test_permanent_failures_are_excluded_even_if_seeded_or_popular(session
     entries = by_symbol(await demand.select_prewarm_universe(session, now=T0))
 
     assert set(entries) == {"FLAKY"}, "a transient failure is still worth retrying"
+
+
+async def test_a_weighted_hit_adds_its_weight_and_counts_as_one_request(session_factory):
+    async with session_factory() as session:
+        await demand.record_demand(session, "ANON", weight=0.25, now=T0)
+        await demand.record_demand(session, "ANON", weight=0.25, now=T0 + WEEK)
+        await session.commit()
+        row = await stored(session, "ANON")
+
+    assert row.request_count == 2
+    assert row.popularity == pytest.approx(0.25 * 0.5 + 0.25)  # the first has halved

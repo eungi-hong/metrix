@@ -14,7 +14,7 @@ from app.models.jobs import JobKind, JobSource, JobStatus
 from app.services import ingestion
 from app.core.errors import TickerNotFoundError
 from app.services import prices as price_service
-from tests.conftest import all_jobs
+from tests.conftest import all_jobs, api_app, api_client, new_api_key
 
 
 # ------------------------------------------------------------------- health
@@ -459,10 +459,17 @@ async def demand_for(session_factory, symbol: str):
         return await session.get(TickerDemand, symbol)
 
 
-async def test_a_ticker_request_records_demand(client, session_factory):
+async def test_a_ticker_request_records_demand_once_per_caller_per_day(
+    client, session_factory, stub_llm
+):
     await client.get("/tickers/cold")
     await client.get("/tickers/COLD")
+    row = await demand_for(session_factory, "COLD")
+    assert row.request_count == 1 and row.popularity == pytest.approx(1.0, rel=1e-3)
 
+    _, key = await new_api_key(session_factory, name="Another")
+    async with api_client(api_app(session_factory, stub_llm), key) as other:
+        await other.get("/tickers/COLD")
     row = await demand_for(session_factory, "COLD")
     assert row.request_count == 2
     assert row.popularity == pytest.approx(2.0, rel=1e-3)
@@ -489,12 +496,17 @@ async def test_an_invalid_symbol_is_not_demand(client, session_factory):
     assert await demand_for(session_factory, "$$$") is None
 
 
-async def test_a_chat_turn_that_resolves_a_ticker_records_demand(client, session_factory):
+async def test_a_chat_turn_that_resolves_a_ticker_records_demand(
+    client, session_factory, stub_llm
+):
     await client.get("/tickers/TEST", params={"wait": True})
-    await client.post("/chat", json={"ticker": "TEST", "question": "Why?"})
-    await client.post("/chat", json={"question": "What happened to Test Industries?"})
+    _, key = await new_api_key(session_factory, name="Chatter")
+    async with api_client(api_app(session_factory, stub_llm), key) as chatter:
+        await chatter.post("/chat", json={"ticker": "TEST", "question": "Why?"})
+        await chatter.post("/chat", json={"question": "What happened to Test Industries?"})
 
-    assert (await demand_for(session_factory, "TEST")).request_count == 3
+    # The ticker request, and the chatter's first turn; their second is the same day.
+    assert (await demand_for(session_factory, "TEST")).request_count == 2
 
 
 async def test_a_chat_turn_without_a_ticker_records_nothing(client, session_factory):

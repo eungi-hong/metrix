@@ -18,6 +18,17 @@ Recording is best-effort. It happens on the request path, so a failure here
 is logged and swallowed: losing a hit costs a slightly worse ranking tonight,
 failing the request would cost the user their answer.
 
+Integrity
+---------
+Demand decides what the nightly run spends money on, so it must not be
+something one caller can manufacture. `count_request` counts a principal's
+requests for a symbol at most once per UTC day (a SET NX in Redis), so a
+script hitting one ticker in a loop moves it by one hit a day, the same as a
+person looking once. Anonymous callers count at DEMAND_ANONYMOUS_WEIGHT, being
+cheap to multiply; the internal plan counts at DEMAND_INTERNAL_WEIGHT (0 by
+default), since our own traffic is not demand. Callers do not count symbols
+the directory rejected, or requests answered 429.
+
 The universe
 ------------
 The nightly pre-warm covers the seed list, the `PREWARM_TOP_N` most popular
@@ -43,7 +54,10 @@ from app.core.logging import get_logger
 from app.core.symbols import is_valid_symbol, normalize_symbol
 from app.models.demand import TickerDemand
 from app.models.enums import IngestStatus
+from app.models.identity import Plan
 from app.models.market import Ticker
+from app.services.auth import Principal
+from app.services.limits import DAILY_KEY_GRACE_SECONDS, day_end, get_limiter
 
 logger = get_logger(__name__)
 
@@ -69,10 +83,48 @@ def decayed_popularity(
 # ------------------------------------------------------------- recording
 
 
+async def count_request(
+    session: AsyncSession, symbol: str, principal: Principal, *, now: datetime | None = None
+) -> bool:
+    """Count `principal`'s request for `symbol`, at most once per UTC day, at
+    their plan's weight. Never raises; True if it counted.
+
+    The once-a-day check uses the limiter's store, so it is shared across
+    processes through Redis, and per process while Redis is down: a little
+    more generous then, but never unbounded.
+    """
+    symbol = normalize_symbol(symbol)
+    now = now or datetime.now(timezone.utc)
+    weight = request_weight(principal.plan)
+    if weight <= 0:
+        return False
+    day = now.astimezone(timezone.utc).date()
+    try:
+        first = await get_limiter().first_seen(
+            f"demand:{principal.key}:{symbol}:{day.isoformat()}",
+            ttl=(day_end(day) - now).total_seconds() + DAILY_KEY_GRACE_SECONDS,
+        )
+    except Exception as exc:  # the store's own fallback failed too
+        logger.warning("demand_dedupe_failed", symbol=symbol, error=str(exc))
+        return False
+    if not first:
+        return False
+    await record_demand(session, symbol, weight=weight, now=now)
+    return True
+
+
+def request_weight(plan: Plan) -> float:
+    if plan == Plan.ANONYMOUS:
+        return settings.demand_anonymous_weight
+    if plan == Plan.INTERNAL:
+        return settings.demand_internal_weight
+    return 1.0
+
+
 async def record_demand(
-    session: AsyncSession, symbol: str, *, now: datetime | None = None
+    session: AsyncSession, symbol: str, *, weight: float = 1.0, now: datetime | None = None
 ) -> None:
-    """Count one request for `symbol`. Never raises.
+    """Add `weight` hits of demand for `symbol`. Never raises.
 
     Runs in a savepoint inside the caller's transaction and does not commit;
     the caller's commit persists it. A failure rolls back only the savepoint.
@@ -82,14 +134,16 @@ async def record_demand(
     try:
         async with session.begin_nested():
             if _dialect(session) == "postgresql":
-                await _record_postgres(session, symbol, now)
+                await _record_postgres(session, symbol, now, weight)
             else:
-                await _record_portable(session, symbol, now)
+                await _record_portable(session, symbol, now, weight)
     except Exception as exc:
         logger.warning("demand_record_failed", symbol=symbol, error=str(exc))
 
 
-async def _record_postgres(session: AsyncSession, symbol: str, now: datetime) -> None:
+async def _record_postgres(
+    session: AsyncSession, symbol: str, now: datetime, weight: float
+) -> None:
     """One atomic upsert, so concurrent hits on one symbol all count.
 
     The decay is computed in SQL from the row as it is at write time, not as
@@ -102,7 +156,7 @@ async def _record_postgres(session: AsyncSession, symbol: str, now: datetime) ->
     )
     statement = pg_insert(TickerDemand).values(
         symbol=symbol,
-        popularity=1.0,
+        popularity=weight,
         popularity_updated_at=now,
         request_count=1,
         first_requested_at=now,
@@ -114,7 +168,7 @@ async def _record_postgres(session: AsyncSession, symbol: str, now: datetime) ->
             set_={
                 "popularity": TickerDemand.popularity
                 * sa.func.exp(-age_days / decay_time_constant_days())
-                + 1,
+                + weight,
                 "popularity_updated_at": now,
                 "request_count": TickerDemand.request_count + 1,
                 "last_requested_at": now,
@@ -123,7 +177,9 @@ async def _record_postgres(session: AsyncSession, symbol: str, now: datetime) ->
     )
 
 
-async def _record_portable(session: AsyncSession, symbol: str, now: datetime) -> None:
+async def _record_portable(
+    session: AsyncSession, symbol: str, now: datetime, weight: float
+) -> None:
     """Read, decay in Python, write. Fine for SQLite, whose writers are
     serialized anyway; not atomic against concurrent writers elsewhere."""
     row = await session.get(TickerDemand, symbol, populate_existing=True)
@@ -131,7 +187,7 @@ async def _record_portable(session: AsyncSession, symbol: str, now: datetime) ->
         session.add(
             TickerDemand(
                 symbol=symbol,
-                popularity=1.0,
+                popularity=weight,
                 popularity_updated_at=now,
                 request_count=1,
                 first_requested_at=now,
@@ -139,7 +195,9 @@ async def _record_portable(session: AsyncSession, symbol: str, now: datetime) ->
             )
         )
     else:
-        row.popularity = decayed_popularity(row.popularity, row.popularity_updated_at, now) + 1
+        row.popularity = (
+            decayed_popularity(row.popularity, row.popularity_updated_at, now) + weight
+        )
         row.popularity_updated_at = now
         row.request_count += 1
         row.last_requested_at = now

@@ -14,6 +14,7 @@ as everything else. The job's id is returned so the caller can follow it at
 from __future__ import annotations
 
 import asyncio
+import math
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -27,7 +28,13 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import CurrentUser, LLMDep, SessionDep
 from app.core.config import settings
 from app.core.context import CallClass
-from app.core.errors import MetrixError, RateLimited, SpendCapReached, UpstreamError
+from app.core.errors import (
+    MetrixError,
+    RateLimited,
+    SpendCapReached,
+    SymbolNotListed,
+    UpstreamError,
+)
 from app.core.logging import get_logger
 from app.core.symbols import is_valid_symbol, normalize_symbol
 from app.models.enums import Direction, IngestStatus, RelevanceTier
@@ -46,7 +53,7 @@ from app.schemas.market import (
     TickerDetailOut,
     TickerOut,
 )
-from app.services import demand, ingestion, queue, quotas, spend
+from app.services import demand, ingestion, queue, quotas, spend, symbol_directory
 from app.services.auth import Principal
 from app.services.limits import LimitResult
 from app.services.llm import LLMProvider
@@ -106,16 +113,31 @@ async def get_ticker_detail(
     if start and end and start > end:
         raise HTTPException(status_code=422, detail="`start` must be on or before `end`.")
 
-    # Before anything that can fail: a request for a ticker that turns out to
-    # be cold or broken is still demand. Best-effort, and committed at once so
-    # it does not depend on how the rest of the request goes.
-    await demand.record_demand(session, symbol)
-    await session.commit()
+    # Before anything that could cost money: a symbol that is not listed is
+    # refused here, with no external call and no demand recorded.
+    verdict = await symbol_directory.check(session, symbol)
+    if not verdict.allowed:
+        raise SymbolNotListed(symbol)
+    symbol = verdict.symbol  # BRK.B is served as BRK-B
 
     ticker = await ingestion.get_ticker(session, symbol)
-    ensured = await _ensure_data(
-        session, ticker, symbol, llm, principal, refresh=refresh, wait=wait
-    )
+    try:
+        ensured = await _ensure_data(
+            session, ticker, symbol, llm, principal, refresh=refresh, wait=wait
+        )
+    except RateLimited:
+        raise  # a refused request is not demand
+    except Exception:
+        # A request for a ticker that turns out to be broken is still demand.
+        await session.rollback()
+        await _count_demand(session, symbol, principal)
+        raise
+    await _count_demand(session, symbol, principal)
+    if verdict.reason == "unlisted":
+        ensured.warnings.append(
+            f"'{symbol}' is not in the US symbol directory; it was served anyway "
+            "because the directory is not enforced."
+        )
     state = ensured.state
     if ensured.job_id is not None and await spend.refused_today(session, CallClass.INTERACTIVE):
         ensured.warnings.append(_SPEND_CAP_WARNING)
@@ -191,6 +213,12 @@ async def get_ticker_detail(
         movements=[_movement_out(m, tier) for m in movements],
         warnings=ensured.warnings,
     )
+
+
+async def _count_demand(session: AsyncSession, symbol: str, principal: Principal) -> None:
+    """Best-effort, and committed at once, so it does not depend on the rest."""
+    await demand.count_request(session, symbol, principal)
+    await session.commit()
 
 
 @dataclass(slots=True)
@@ -288,6 +316,18 @@ async def _ensure_data(
     has_data = ticker is not None and ticker.last_ingested_at is not None
     busy: IngestState = "refreshing" if has_data else "ingesting"
     warnings: list[str] = []
+    if refresh and ticker is not None and ticker.last_ingested_at is not None:
+        # One ticker, refreshed at most once per cooldown, whoever asks: a
+        # refresh minutes after the last finds the same news at the same price.
+        since = datetime.now(timezone.utc) - _as_utc(ticker.last_ingested_at)
+        cooldown = timedelta(minutes=settings.refresh_cooldown_minutes)
+        if since < cooldown:
+            refresh = False
+            warnings.append(
+                f"Refreshed {int(since.total_seconds() // 60)} minute(s) ago; refresh=true "
+                f"is available again in {math.ceil((cooldown - since).total_seconds() / 60)} "
+                "minute(s). Showing stored data."
+            )
     if wait and not quotas.limits_for(principal).allow_wait:
         wait = False
         warnings.append(_NO_WAIT_ON_PLAN.format(plan=principal.plan.value))
@@ -570,3 +610,8 @@ def _empty_response(
         pagination=PaginationOut(limit=0, offset=0, total=0, returned=0),
         movements=[],
     )
+
+
+def _as_utc(value: datetime) -> datetime:
+    """SQLite hands back naive datetimes; Postgres hands back aware ones."""
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)

@@ -270,12 +270,73 @@ class Settings(BaseSettings):
         description="A key's last_used_at is refreshed at most this often, so "
         "authenticating is not a write on every request.",
     )
+    cors_allowed_origins: str = Field(
+        default="",
+        description="Comma-separated browser origins allowed to call the API. "
+        "Leave empty to emit no CORS headers; set http://localhost:5173 for the local frontend.",
+    )
     plan_limits_json: Annotated[dict[str, PlanLimits], NoDecode] = Field(
         default_factory=lambda: dict(DEFAULT_PLAN_LIMITS),
         description="JSON map of plan -> limits, overriding the defaults field by "
         "field, e.g. {\"free\": {\"chat_per_day\": 20}}. Plans: anonymous, free, "
         "pro, internal.",
     )
+    demand_anonymous_weight: float = Field(
+        default=0.25,
+        ge=0,
+        description="What one anonymous caller's daily request for a symbol adds "
+        "to its popularity; a user's adds 1. Anonymous callers are cheap to multiply.",
+    )
+    demand_internal_weight: float = Field(
+        default=0.0,
+        ge=0,
+        description="The same for the internal plan. 0: our own traffic is not demand.",
+    )
+    refresh_cooldown_minutes: float = Field(
+        default=60.0,
+        ge=0,
+        description="refresh=true within this long of a ticker's last ingestion, by "
+        "anyone, returns stored data instead of ingesting again.",
+    )
+
+    # --------------------------------------------------- symbol directory
+    symbol_directory_mode: Literal["enforce", "warn", "off"] = Field(
+        default="enforce",
+        description="enforce: an unknown symbol is 404 before any external call. "
+        "warn: it is served, and logged. off: no check. enforce acts as warn "
+        "while the directory is still empty, so a fresh deploy works.",
+    )
+    symbol_directory_urls: str = Field(
+        default=(
+            "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt,"
+            "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
+        ),
+        description="Comma-separated Nasdaq Trader symbol directory files: "
+        "nasdaqlisted.txt (Nasdaq) and otherlisted.txt (NYSE, NYSE American, "
+        "NYSE Arca, Cboe, IEX and others). US listings only.",
+    )
+    symbol_allowlist: str = Field(
+        default="",
+        description="Comma-separated symbols allowed though not in the directory, "
+        "e.g. foreign listings in Yahoo's form: RY.TO,VOD.L,7203.T.",
+    )
+    symbol_directory_min_rows: int = Field(
+        default=5000,
+        ge=0,
+        description="A refresh with fewer rows than this is assumed broken and "
+        "discarded; the previous directory stays.",
+    )
+    symbol_directory_max_shrink: float = Field(
+        default=0.2,
+        ge=0,
+        le=1,
+        description="A refresh that would remove more than this fraction of the "
+        "current directory is assumed broken and discarded.",
+    )
+    symbol_directory_timeout_seconds: float = Field(
+        default=30.0, gt=0, description="Per-file download timeout."
+    )
+
     api_max_inline_ingestions: int = Field(
         default=2,
         ge=0,

@@ -27,6 +27,7 @@ class JobKind(StrEnum):
     PREWARM_SECTOR_MACRO = "prewarm_sector_macro"
     ENRICH_MOVEMENT = "enrich_movement"
     SCHEDULE_NIGHTLY = "schedule_nightly"
+    REFRESH_SYMBOL_DIRECTORY = "refresh_symbol_directory"
 
 
 class JobStatus(StrEnum):

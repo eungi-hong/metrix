@@ -95,7 +95,7 @@ async def answer_question(
     ticker = await _resolve_ticker(session, request, conversation)
     if ticker is not None:
         # Persisted with this turn's commit; a turn that fails does not count.
-        await demand.record_demand(session, ticker.symbol)
+        await demand.count_request(session, ticker.symbol, principal)
     context = await _retrieve(session, ticker, request.start, request.end)
 
     history = await _load_history(session, conversation)

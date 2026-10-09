@@ -32,7 +32,7 @@ from app.main import create_app
 from app.models.identity import Plan, User
 from app.models.jobs import Job
 from app.services import prices as price_service
-from app.services import auth, limits, ratelimit, spend
+from app.services import auth, limits, ratelimit, spend, symbol_directory
 from app.services.llm import LLMProvider, get_llm_client
 from app.services.peers import PeerSet
 from app.services.prices import PriceBarData, PriceHistory, TickerProfile
@@ -214,8 +214,10 @@ def fresh_limits(monkeypatch: pytest.MonkeyPatch) -> limits.MemoryLimitStore:
     monkeypatch.setattr(settings, "redis_url", None)
     store = limits.MemoryLimitStore()
     limits.configure(limits.Limiter(None, store))
+    symbol_directory.reset_cache()
     yield store
     limits.configure(None)
+    symbol_directory.reset_cache()
 
 
 @pytest.fixture(autouse=True)

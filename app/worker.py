@@ -19,7 +19,8 @@ The nightly schedule
 --------------------
 Each worker also runs a small scheduler. Whenever it wakes, it enqueues the
 most recent scheduled run (`schedule.latest_run_at`) unless that trading date
-already has one, then sleeps until the next. Waking for the most recent run,
+already has one, then sleeps until the next; and it enqueues the week's
+symbol-directory refresh if this ISO week has none. Waking for the most recent run,
 rather than only at the exact instant, means a worker that was down at 17:15
 catches up when it starts. Every replica may do this: the job is deduplicated
 on `nightly:{date}`, and the run itself is unique per trading date, so a date
@@ -123,7 +124,7 @@ class Worker:
             for i in range(self._concurrency)
         ]
         background = [asyncio.create_task(self._reap_loop())]
-        if settings.prewarm_schedule_enabled and JobKind.SCHEDULE_NIGHTLY in self._handlers:
+        if self._schedules_nightly or self._schedules_directory:
             background.append(asyncio.create_task(self._schedule_loop()))
 
         await self._stopping.wait()
@@ -279,11 +280,50 @@ class Worker:
             await session.commit()
             return job
 
+    @property
+    def _schedules_nightly(self) -> bool:
+        return settings.prewarm_schedule_enabled and JobKind.SCHEDULE_NIGHTLY in self._handlers
+
+    @property
+    def _schedules_directory(self) -> bool:
+        return (
+            settings.symbol_directory_mode != "off"
+            and JobKind.REFRESH_SYMBOL_DIRECTORY in self._handlers
+        )
+
+    async def directory_tick(self, now: datetime | None = None) -> Job | None:
+        """Enqueue this ISO week's symbol-directory refresh, unless one exists.
+
+        Any job for the week counts, finished or dead: a refresh that failed
+        every attempt waits for next week rather than retrying every tick, and
+        the directory it failed to replace stays in use meanwhile.
+        """
+        now = now or datetime.now(timezone.utc)
+        key = queue.symbols_key(now.date())
+        async with self._session_factory() as session:
+            if await queue.key_used(session, key):
+                return None
+            job = await queue.enqueue(
+                session,
+                JobKind.REFRESH_SYMBOL_DIRECTORY,
+                {},
+                priority=queue.PRIORITY_NIGHTLY_FANOUT,
+                dedupe_key=key,
+                source=JobSource.SCHEDULED,
+                run_after=queue.jittered(now, not_before=now),
+                now=now,
+            )
+            await session.commit()
+            return job
+
     async def _schedule_loop(self) -> None:
         while not self._stopping.is_set():
             now = datetime.now(timezone.utc)
             try:
-                await self.schedule_tick(now)
+                if self._schedules_nightly:
+                    await self.schedule_tick(now)
+                if self._schedules_directory:
+                    await self.directory_tick(now)
             except Exception as exc:
                 logger.error("schedule_tick_failed", error=str(exc))
             until_next = (schedule.next_run_after(now) - now).total_seconds()

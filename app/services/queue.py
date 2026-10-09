@@ -126,6 +126,19 @@ def nightly_key(trading_date: date) -> str:
     return f"nightly:{trading_date.isoformat()}"
 
 
+def symbols_key(day: date) -> str:
+    """One symbol-directory refresh per ISO week, e.g. "symbols:2026-W41"."""
+    year, week, _ = day.isocalendar()
+    return f"symbols:{year}-W{week:02d}"
+
+
+async def key_used(session: AsyncSession, dedupe_key: str) -> bool:
+    """Whether any job, active or finished, has held `dedupe_key`."""
+    return (
+        await session.scalar(sa.select(sa.literal(True)).where(Job.dedupe_key == dedupe_key).limit(1))
+    ) is not None
+
+
 def prices_key(trading_date: date, chunk: int) -> str:
     return f"prices:{trading_date.isoformat()}:{chunk}"
 

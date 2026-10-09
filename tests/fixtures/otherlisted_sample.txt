@@ -1,0 +1,13 @@
+ACT Symbol|Security Name|Exchange|CQS Symbol|ETF|Round Lot Size|Test Issue|NASDAQ Symbol
+A|Agilent Technologies, Inc. Common Stock|N|A|N|100|N|A
+AAC.U|Ares Acquisition Corporation III Units, each consisting of one Class A ordinary share and one-tenth of one redeemable warrant|N|AAC.U|N|100|N|AAC=
+AAC.W|Ares Acquisition Corporation III Redeemable warrants, each whole warrant exercisable for one Class A ordinary share at an exercise price of $11.50|N|AAC.WS|N|100|N|AAC+
+ABR$D|Arbor Realty Trust 6.375% Series D Cumulative Redeemable Preferred Stock, Liquidation Preference $25.00 per Share|N|ABRpD|N|100|N|ABR-D
+BF.B|Brown Forman Inc Class B Common Stock|N|BF.B|N|100|N|BF.B
+BRK.A|Berkshire Hathaway Inc. Common Stock|N|BRK.A|N|1|N|BRK.A
+BRK.B|Berkshire Hathaway Inc. New Common Stock|N|BRK.B|N|40|N|BRK.B
+DHI|D.R. Horton, Inc. Common Stock|N|DHI|N|100|N|DHI
+JPM|JP Morgan Chase & Co. Common Stock|N|JPM|N|40|N|JPM
+SPY|State Street SPDR S&P 500 ETF Trust|P|SPY|Y|40|N|SPY
+ZZZTX|TXSE Test Stk 5 Common Stock|F|ZZZTX|N|40|Y|ZZZTX
+File Creation Time: 1009202610:01||||||

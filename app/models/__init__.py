@@ -24,6 +24,7 @@ from app.models.news import (
     normalize_url,
     url_fingerprint,
 )
+from app.models.symbols import ListedSymbol
 from app.models.usage import SpendDaily, UsageEvent
 
 __all__ = [
@@ -37,6 +38,7 @@ __all__ = [
     "JobKind",
     "JobRequester",
     "JobSource",
+    "ListedSymbol",
     "JobStatus",
     "MessageRole",
     "Movement",

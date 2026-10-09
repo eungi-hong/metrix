@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.errors import register_exception_handlers
 from app.api.middleware import InteractiveAttributionMiddleware
@@ -53,6 +54,19 @@ def create_app() -> FastAPI:
         version="1.0.0",
         lifespan=lifespan,
     )
+    # The API remains same-origin by default. Local browser clients opt in via
+    # CORS_ALLOWED_ORIGINS; this is intentionally a narrow allow-list rather
+    # than a permissive development wildcard.
+    cors_origins = [origin.strip() for origin in settings.cors_allowed_origins.split(",") if origin.strip()]
+    if cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["Authorization", "Content-Type"],
+            max_age=600,
+        )
     app.add_middleware(InteractiveAttributionMiddleware)
     register_exception_handlers(app)
     app.include_router(health.router)

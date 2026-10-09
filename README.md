@@ -37,6 +37,31 @@ export METRIX_API_KEY=mtx_...  # the key it printed; it is shown only once
 The API is on <http://localhost:8000>, interactive docs at <http://localhost:8000/docs>
 (use **Authorize** there to paste the key).
 
+### Frontend workspace
+
+The React research workspace lives in [`frontend/`](frontend). It is a separate Vite
+application, so it does not alter the FastAPI routes or the backend's source of truth.
+
+```bash
+# in a second terminal, from the repository root
+cp frontend/.env.example frontend/.env
+# set CORS_ALLOWED_ORIGINS=http://localhost:5173 in the root .env for local browser access
+cd frontend
+npm install
+npm run dev
+```
+
+Open <http://localhost:5173>. Enter an `mtx_…` API key using the API-key control; it
+is kept in memory unless you explicitly choose session-only storage. The initial
+screen also offers **View demo data**, which is clearly labelled local fixture data
+rather than API data. For a production check, run `npm run typecheck`, `npm run lint`,
+`npm test`, and `npm run build` from `frontend/`.
+
+`CORS_ALLOWED_ORIGINS` is an optional, comma-separated FastAPI allow-list. It is empty
+by default (same-origin only); setting only `http://localhost:5173` permits the local
+Vite app's `GET /tickers`, `GET /jobs`, and `POST /chat` calls without enabling a
+wildcard origin.
+
 > The `curl` examples below print raw JSON. For the same data as a readable tree,
 > skip to [Reading it in a terminal](#reading-it-in-a-terminal).
 
@@ -117,6 +142,19 @@ served from storage with a warning rather than refused. `wait=true` on a plan wi
 it is queued instead, with a warning; where it is allowed, at most
 `API_MAX_INLINE_INGESTIONS` run at once per API process, and past that the answer is
 `429`.
+
+`refresh=true` within `REFRESH_COOLDOWN_MINUTES` (60) of a ticker's last ingestion,
+by anyone, serves the stored data with a note saying when a refresh is next possible,
+and costs nothing.
+
+Only listed symbols are served. The worker downloads the US symbol directory weekly
+(Nasdaq Trader's `nasdaqlisted.txt` and `otherlisted.txt`, covering Nasdaq, NYSE and
+the other US venues), and a symbol not in it gets `404` before anything external is
+called and without counting as demand. Class shares can be asked for either way:
+`BRK.B` is served as `BRK-B`. Foreign listings (`RY.TO`) are not in a US directory;
+add them to `SYMBOL_ALLOWLIST`. Tickers already ingested and the seed list are always
+allowed. Until the first weekly refresh fills the directory, unknown symbols are
+served with a warning instead (`SYMBOL_DIRECTORY_MODE`).
 
 Quotas are counted in Redis (`REDIS_URL`), shared by every API process. If Redis is
 unreachable they keep working per process, and `/health` reports `"redis":
@@ -541,6 +579,7 @@ app/
     auth.py       API keys (issue, check, revoke) and the caller's identity
     limits.py     GCRA and daily counters, on Redis or in memory, with fall-back
     quotas.py     per-plan quotas: charge, refund
+    symbol_directory.py  the US symbol directory: download, parse, refresh, check
     job_handlers.py  what each kind of queued job does
     chat.py       retrieval, prompt assembly, citation labels
     llm/          provider abstraction, Anthropic adapter, uniform error mapping
@@ -679,6 +718,9 @@ No Docker, no network, no API keys.
   Redis is unreachable.
 - `tests/test_quotas.py` — 429s and their headers, chat's charge and refund, cold
   ingests and refreshes, `wait=true` and its inline slots, and `/health` on Redis.
+- `tests/test_symbols.py` — the directory parser against samples cut from the real
+  files, `BRK.B` ↔ `BRK-B`, refreshes that never empty or gut the table, enforce, warn
+  and off, demand that one caller cannot inflate, and the refresh cooldown.
 - `tests/test_show_cli.py` — the renderer's citation parsing, colour gating, and
   sparkline edge cases.
 

@@ -214,3 +214,63 @@ rather than one per request. Each process then enforces each limit on its own, s
 caller can get up to (processes x limit) for the length of the outage. Taking the API
 down because a limiter is unavailable would be worse, and the spend cap, in Postgres,
 still holds. `/health` reports `"redis": "unreachable"` and status `degraded`.
+
+## Abuse controls on the expensive paths
+
+### Unknown symbols cost nothing
+
+Before this stage the only check on a symbol was a regex, so any well-formed nonsense
+(`QWZX`) cost a yfinance call, a failed ingestion and a demand hit. Now a symbol must be
+in the US symbol directory, table `listed_symbols`, before anything external is called
+for it. Otherwise `GET /tickers` answers 404 at once, records no demand, and logs
+`symbol_rejected`. Chat needs no check: it only ever looks up tickers already stored.
+
+The directory comes from Nasdaq Trader's two pipe-delimited files,
+`nasdaqlisted.txt` (Nasdaq) and `otherlisted.txt` (NYSE, NYSE American, NYSE Arca, Cboe,
+IEX and others), checked against the live files when this was written: a header line,
+one row per symbol, a `File Creation Time` trailer, and rows flagged `Test Issue = Y`
+that are not real listings. The parser is tested against samples cut from those files.
+A `refresh_symbol_directory` job replaces the table once per ISO week, scheduled by the
+worker like the nightly run (dedupe key `symbols:2026-W41`).
+
+A refresh must never leave the service worse off. A failed download, a file without
+its trailer (cut short), fewer than `SYMBOL_DIRECTORY_MIN_ROWS` symbols, or a drop of
+more than `SYMBOL_DIRECTORY_MAX_SHRINK` of the current table each raise, leaving the
+table as it was. The job is then retried with backoff. Only then is the table
+replaced, in one transaction, so readers see the old directory or the new, never half
+of one. A week whose refresh fails every attempt keeps last week's directory.
+
+The files write class shares with a dot and preferreds with a dollar sign (`BRK.B`,
+`ABR$D`); Yahoo, which ingestion fetches from, writes `BRK-B` and `ABR-PD`. The
+directory stores Yahoo's form, and a request in the files' form is served under it, so
+`BRK.B` and `BRK-B` are the same ticker.
+
+The directory is US-only. Foreign listings (`RY.TO`, `VOD.L`) are allowed through
+`SYMBOL_ALLOWLIST`. Tickers already ingested successfully, which may since have been
+delisted, and the seed list are always allowed. `SYMBOL_DIRECTORY_MODE` is `enforce`,
+`warn` (serve, and log what would have been refused) or `off`. `enforce` acts as `warn`
+until the first refresh fills the table, so a fresh deploy works on day one.
+
+### Demand one caller cannot manufacture
+
+Demand decides what the nightly run spends money on. Before this stage every request
+counted, so one script requesting `XYZ` in a loop would push it into the nightly top N,
+and the nightly budget would be spent on it.
+
+Now a caller's requests for a symbol count at most once per UTC day, through a
+`SET NX` in the limiter's store. Twenty-five requests from one caller and one from
+another are two hits, and a test shows one caller's spam losing a place in the universe
+to three real users. While Redis is down the check runs per process; that is slightly
+more generous than shared, and bounded, which the brief's "always count" would not have
+been. Anonymous callers count at `DEMAND_ANONYMOUS_WEIGHT` (0.25), since they are cheap
+to multiply. The internal plan counts at `DEMAND_INTERNAL_WEIGHT` (0), since our own
+traffic is not demand. A request refused by the directory, or answered 429, records no
+demand at all; a request for a real ticker that then fails still does.
+
+### refresh=true
+
+A refresh is charged against `refresh_per_day` when it starts work. On top of that,
+whoever asks, a ticker is refreshed at most once per `REFRESH_COOLDOWN_MINUTES` (60):
+inside the cooldown the stored data is served, with a note saying when a refresh is
+next possible, and nothing is charged. A refresh a few minutes after the last would
+find the same prices and the same news.
