@@ -31,7 +31,11 @@ import yfinance as yf
 from app.core.config import settings
 from app.core.errors import PriceDataError, TickerNotFoundError
 from app.core.logging import get_logger
+from app.services import ratelimit
 from app.services.movements import PricePoint
+
+# One history request and one profile request.
+YF_CALLS_PER_SINGLE_FETCH = 2
 
 logger = get_logger(__name__)
 
@@ -207,6 +211,8 @@ async def fetch_price_history(symbol: str, days: int | None = None) -> PriceHist
     days = days or settings.price_history_days
     symbol = symbol.strip().upper()
     logger.info("price_fetch_start", symbol=symbol, days=days)
+    for _ in range(YF_CALLS_PER_SINGLE_FETCH):
+        await ratelimit.bucket("yfinance").acquire()
 
     history = await asyncio.to_thread(_fetch_sync, symbol, days)
 
@@ -244,6 +250,7 @@ async def fetch_price_histories(
     for offset in range(0, len(symbols), settings.price_batch_size):
         chunk = symbols[offset : offset + settings.price_batch_size]
         logger.info("price_batch_fetch_start", symbols=len(chunk), days=days)
+        await ratelimit.bucket("yfinance").acquire()
         try:
             frame, errors = await asyncio.to_thread(_download_sync, chunk, days)
         except Exception as exc:  # the whole batch failed: every symbol is transient
@@ -255,11 +262,11 @@ async def fetch_price_histories(
             if isinstance(outcome, Exception):
                 results[symbol] = outcome
                 continue
-            profile = (
-                await asyncio.to_thread(_fetch_profile, yf.Ticker(symbol), symbol)
-                if symbol in wanted_profiles
-                else TickerProfile(symbol=symbol)
-            )
+            if symbol in wanted_profiles:
+                await ratelimit.bucket("yfinance").acquire()
+                profile = await asyncio.to_thread(_fetch_profile, yf.Ticker(symbol), symbol)
+            else:
+                profile = TickerProfile(symbol=symbol)
             results[symbol] = PriceHistory(profile=profile, bars=outcome)
 
         failed = sorted(s for s in chunk if isinstance(results[s], Exception))

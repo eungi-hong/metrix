@@ -9,6 +9,8 @@ GET  /tickers/{symbol}   stock + news data, nested movement → articles → tie
 POST /chat               grounded, multi-turn Q&A over that data, with citations
 GET  /jobs/{id}          status, progress and errors of a queued background job
 GET  /health             liveness and which integrations are configured
+POST /admin/prewarm      start a pre-warm run now          (X-Admin-Token)
+GET  /admin/queue        queue health and the last run     (X-Admin-Token)
 ```
 
 ---
@@ -151,6 +153,29 @@ curl "http://localhost:8000/tickers/NVDA?tier=easy&tier=medium&limit=10&offset=1
 # The price series, for charting
 curl "http://localhost:8000/tickers/NVDA?include_prices=true&limit=0" | jq '.prices[:3]'
 ```
+
+### Pre-warming
+
+The worker also warms the tickers people are likely to ask for, every weekday at
+17:15 New York time, after the close. It refreshes prices for the seed list
+(`data/seed_universe.txt`), the most requested tickers and anything requested in the
+last two weeks, then spends a nightly budget (`PREWARM_MAX_ENRICHMENTS_PER_RUN`) on news
+for their new movements, most requested first. A popular ticker then answers `ready`,
+with news, on its first request of the day. Movements the budget did not reach are
+enriched as soon as someone asks for their ticker.
+
+To run it now instead of waiting for 17:15, set `ADMIN_TOKEN` in `.env` and:
+
+```bash
+curl -X POST -H "X-Admin-Token: $ADMIN_TOKEN" http://localhost:8000/admin/prewarm
+curl -H "X-Admin-Token: $ADMIN_TOKEN" http://localhost:8000/admin/queue
+```
+
+`/admin/queue` shows jobs by kind and status, how long the oldest due job has waited,
+the latest dead jobs with their errors, and the last run's numbers (universe size,
+movements found, enrichments queued, used and deferred). Both admin endpoints answer
+`503` until `ADMIN_TOKEN` is set. The design, and why it is built this way, is in
+[docs/PREWARMING.md](docs/PREWARMING.md).
 
 ### Chat
 
@@ -404,6 +429,9 @@ app/
                   enrich_movement (news → scores → links) per movement
     queue.py      the Postgres job queue: enqueue/dedupe, claim, retry, reap
     demand.py     decayed popularity per symbol, and the nightly pre-warm universe
+    prewarm.py    the nightly run: fan-out, price chunks, priorities, the budget
+    schedule.py   when it runs: 17:15 New York, weekdays, DST-correct
+    ratelimit.py  per-provider token buckets for Exa, Anthropic and yfinance
     job_handlers.py  what each kind of queued job does
     chat.py       retrieval, prompt assembly, citation labels
     llm/          provider abstraction, Anthropic adapter, uniform error mapping
@@ -523,6 +551,11 @@ No Docker, no network, no API keys.
   without the model in between.
 - `tests/test_demand.py` — popularity decay, recording hits, and choosing the pre-warm
   universe (seeds, most popular, recently requested, minus permanent failures).
+- `tests/test_prewarm.py` — one whole night end to end, the price chunks, the budget,
+  priorities, the scheduler, the admin endpoints, and enriching on demand what the
+  budget deferred.
+- `tests/test_schedule.py` — the 17:15 schedule across both DST changes and weekends.
+- `tests/test_ratelimit.py` — the token buckets on a fake clock, and backing off on 429.
 - `tests/test_show_cli.py` — the renderer's citation parsing, colour gating, and
   sparkline edge cases.
 
@@ -551,8 +584,10 @@ TEST_DATABASE_URL=postgresql+asyncpg://metrix:metrix@localhost:5433/metrix_test 
   is exactly the distinction the Hard tier is trying to make downstream.
 - **Article bodies are whatever Exa returns** — usually a summary or the first ~2k
   characters, sometimes paywalled boilerplate. Scoring quality is bounded by that.
-- **No backfill scheduler yet.** Ingestion runs through a durable job queue, but is
-  still request-triggered: the first caller for a ticker waits. Scheduled pre-warming
-  is in progress; see [docs/PREWARMING.md](docs/PREWARMING.md).
+- **Rate limits are per process.** Each worker process has its own token buckets, so
+  with N workers each should be configured for 1/N of a provider's limit. A shared
+  bucket in Postgres or Redis is the upgrade path; see
+  [docs/PREWARMING.md](docs/PREWARMING.md).
+- **Tickers outside the pre-warm universe are still cold** on their first request.
 - **Relevance is unevaluated.** There is no labelled set, so "the scoring is good" is
   an assertion, not a measurement. See `SUBMISSION.md`.

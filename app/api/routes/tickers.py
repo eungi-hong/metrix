@@ -22,6 +22,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import LLMDep, SessionDep
+from app.core.config import settings
+from app.core.errors import MetrixError
 from app.core.logging import get_logger
 from app.core.symbols import is_valid_symbol, normalize_symbol
 from app.models.enums import Direction, IngestStatus, RelevanceTier
@@ -203,7 +205,7 @@ async def _ensure_data(
     has_data = ticker is not None and ticker.last_ingested_at is not None
     busy: IngestState = "refreshing" if has_data else "ingesting"
     if ticker is not None and not refresh and not ingestion.is_stale(ticker):
-        return _Ensured("ready")
+        return await _enrich_what_is_owed(session, ticker, llm, wait=wait)
 
     # Report a recent failure instead of silently retrying it on every request.
     # Without this a permanently broken symbol (delisted, or a news key that is
@@ -254,6 +256,52 @@ async def _ensure_data(
         f"/jobs/{job.id}, or repeat the request with `?wait=true` to block "
         "until it finishes.",
         job.id,
+    )
+
+
+async def _enrich_what_is_owed(
+    session: AsyncSession, ticker: Ticker, llm: LLMProvider, *, wait: bool
+) -> _Ensured:
+    """Fresh prices, but maybe movements still owed news.
+
+    The nightly run refreshes prices for its whole universe but enriches only
+    as many movements as its budget allows; the rest stay PENDING until
+    someone asks. This is that someone: their enrichment is enqueued at
+    interactive priority. A nightly job already queued for a movement shares
+    its dedupe key, so it is pulled to the front rather than duplicated.
+    """
+    owed = await ingestion.enrichable_movements(
+        session, ticker, limit=settings.max_movements_per_ingest
+    )
+    if not owed:
+        return _Ensured("ready")
+
+    if wait:
+        warnings: list[str] = []
+        for movement in owed:
+            try:
+                await ingestion.enrich_movement(session, movement.id, llm=llm)
+            except MetrixError as exc:
+                warnings.append(f"{movement.date}: {exc}")
+        return _Ensured("ready", warnings=warnings)
+
+    jobs = [
+        await queue.enqueue(
+            session,
+            JobKind.ENRICH_MOVEMENT,
+            {"movement_id": movement.id},
+            priority=queue.PRIORITY_INTERACTIVE,
+            dedupe_key=queue.enrich_key(movement.id),
+            source=JobSource.INTERACTIVE,
+        )
+        for movement in owed
+    ]
+    await session.commit()
+    return _Ensured(
+        "refreshing",
+        f"Showing stored data; news for {len(owed)} movement(s) is being fetched. "
+        f"Follow the largest at GET /jobs/{jobs[0].id}.",
+        jobs[0].id,
     )
 
 

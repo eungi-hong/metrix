@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -176,6 +177,51 @@ class Settings(BaseSettings):
         description="Anything requested within this many days is pre-warmed too.",
     )
 
+    # ---------------------------------------------------- nightly pre-warm
+    prewarm_schedule_enabled: bool = Field(
+        default=True,
+        description="Whether worker processes schedule the nightly run. Safe to "
+        "leave on in every replica: a trading date is only ever run once.",
+    )
+    prewarm_run_at: str = Field(
+        default="17:15",
+        pattern=r"^([01]\d|2[0-3]):[0-5]\d$",
+        description="Local time (PREWARM_TIMEZONE) of the nightly run, Mon-Fri. "
+        "After the 16:00 close, once yfinance has settled the day's bars.",
+    )
+    prewarm_timezone: str = Field(
+        default="America/New_York", description="Time zone of PREWARM_RUN_AT."
+    )
+    prewarm_jitter_seconds: float = Field(
+        default=60.0,
+        ge=0,
+        description="Scheduled jobs start up to this many seconds either side of "
+        "their nominal time, so a run does not stampede at one instant.",
+    )
+    prewarm_max_enrichments_per_run: int = Field(
+        default=300,
+        ge=0,
+        description="Movement enrichments (news searches + one LLM call each) a "
+        "nightly run may spend. The rest wait for demand or the next night.",
+    )
+    admin_token: str | None = Field(
+        default=None,
+        description="Required in the X-Admin-Token header by /admin endpoints, "
+        "which are disabled while it is unset.",
+    )
+
+    # -------------------------------------------------------- rate limits
+    # Per process. With N worker processes, set each to (provider limit) / N.
+    exa_max_rps: float = Field(
+        default=5.0, gt=0, description="Exa requests per second, per process."
+    )
+    anthropic_max_rpm: float = Field(
+        default=50.0, gt=0, description="Anthropic requests per minute, per process."
+    )
+    yfinance_max_rps: float = Field(
+        default=2.0, gt=0, description="yfinance requests per second, per process."
+    )
+
     # ---------------------------------------------------------- job queue
     job_max_attempts: int = Field(
         default=3,
@@ -271,6 +317,15 @@ class Settings(BaseSettings):
                 "or healthy jobs would be reaped between heartbeats."
             )
         return self
+
+    @field_validator("prewarm_timezone")
+    @classmethod
+    def _require_known_timezone(cls, v: str) -> str:
+        try:
+            ZoneInfo(v)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"PREWARM_TIMEZONE '{v}' is not a known IANA time zone") from exc
+        return v
 
     @field_validator("database_url")
     @classmethod

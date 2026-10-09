@@ -28,6 +28,7 @@ from tenacity import (
 from app.core.config import settings
 from app.core.errors import ConfigurationError, NewsProviderError
 from app.core.logging import get_logger
+from app.services import ratelimit
 from app.services.news.base import (
     NewsCandidate,
     NewsProvider,
@@ -110,11 +111,16 @@ class ExaNewsProvider(NewsProvider):
         reraise=True,
     )
     async def _post(self, client: httpx.AsyncClient, body: dict[str, Any]) -> dict[str, Any]:
+        limiter = ratelimit.bucket("exa")
+        await limiter.acquire()  # every attempt, retries included
         try:
             response = await client.post("/search", json=body)
         except httpx.RequestError as exc:
             raise _RetryableUpstream(f"transport error: {exc}") from exc
 
+        if response.status_code == 429:
+            # Slow every Exa call in this process down, not just this one.
+            limiter.backoff(ratelimit.retry_after_seconds(response.headers.get("retry-after")))
         if response.status_code in _RETRYABLE_STATUS:
             raise _RetryableUpstream(f"HTTP {response.status_code}: {response.text[:200]}")
         if response.status_code in (401, 403):

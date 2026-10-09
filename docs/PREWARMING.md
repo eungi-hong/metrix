@@ -1,9 +1,24 @@
 # Pre-warming
 
-Pre-warming computes the data users are likely to ask for before they ask, so that
-popular tickers are already warm. This document grows with the work. The fixes below
-came first, because both undermined pre-warming: one made the cheapest shared search
-unshared, the other made early results permanent.
+Metrix used to do all its work on demand. The first request for a ticker paid for
+everything: a yfinance download, then for each movement up to three Exa searches and
+one LLM scoring call, often minutes in all. That work ran in FastAPI's
+`BackgroundTasks`, inside the API process, so it was lost on restart, unbounded in
+concurrency, invisible, and never retried. Nothing controlled when the expensive work
+happened or how fast external APIs were called.
+
+Pre-warming computes, at a chosen time, the data users are likely to ask for, so that
+popular tickers are already warm when they do. It rests on one property of the domain.
+A past movement whose news window has closed and been enriched never needs enriching
+again, and prices are cheap (yfinance downloads a hundred symbols in one call), while
+news enrichment is the expensive part. So the nightly run refreshes prices broadly and
+cheaply, and spends enrichment only on new movements of tickers people actually look
+at.
+
+This document covers, in order: two fixes that had to come first; the durable job
+queue that replaced `BackgroundTasks`; ingestion split into steps the queue can run
+separately; demand tracking, which decides what is worth warming; and the nightly run
+itself, with its priorities, rate limits, budget and trade-offs.
 
 ## Fixes that came first
 
@@ -311,3 +326,177 @@ it is cleared by the next successful ingestion. A request for a nonsense symbol
 therefore costs one failed ingestion and then drops out of the universe, instead of
 being retried every night. A transient failure keeps its ticker in the universe. Rows
 that failed before this column existed are treated as transient until they fail again.
+
+## The nightly run
+
+### When
+
+US equities close at 16:00 New York time. The run starts at `PREWARM_RUN_AT`, 17:15 by
+default, once yfinance has settled the day's bars, Monday to Friday. The schedule is
+computed in New York time with `zoneinfo`, so it stays at 17:15 on the wall clock across
+both daylight-saving changes; in UTC it moves between 21:15 and 22:15.
+`schedule.next_run_after(now)` and `schedule.latest_run_at(now)` are pure functions,
+tested across both 2026 changes and over weekends.
+
+Market holidays are not special-cased. The run is idempotent: on a holiday yfinance
+has no new bar, detection finds nothing new, and the run refreshes some prices and
+spends nothing on news. A holiday calendar would save those few cheap calls, at the
+cost of a dependency and a list that needs updating every year.
+
+Each worker runs a small scheduler. Whenever it wakes, it enqueues a `schedule_nightly`
+job for the most recent scheduled time, unless that trading date already has a run,
+and then sleeps until the next one, at most five minutes at a time. Enqueueing the most
+recent run, rather than only at the exact instant, means a worker that was down at
+17:15 catches up when it starts. Any number of replicas can do this safely. The job's
+`nightly:{date}` dedupe key folds simultaneous attempts into one job. The run row's
+unique `trading_date` makes a later duplicate a no-op. The job's `run_after` is
+jittered by up to `PREWARM_JITTER_SECONDS` either way, so the run does not start at
+exactly 17:15:00.
+
+`POST /admin/prewarm` starts a run immediately. It is guarded by the `X-Admin-Token`
+header and disabled while `ADMIN_TOKEN` is unset. A date that has already run answers
+`409`; pass another `trading_date` to run again.
+
+### What it does
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant S as Scheduler (in each worker)
+    participant Q as jobs table
+    participant W as Workers
+    participant Y as yfinance
+    participant E as Exa
+    participant L as Anthropic
+
+    S->>Q: schedule_nightly (nightly:2026-10-09, 17:15 ± jitter)
+    W->>Q: claim schedule_nightly
+    W->>W: open prewarm_runs row, select universe
+    W->>Q: refresh_prices × ceil(universe / 100)
+    loop each chunk (priority 5)
+        W->>Q: claim refresh_prices
+        W->>Y: one batch download (45 days, or a year if new)
+        W->>W: take each ticker's claim, merge bars, detect movements
+        W->>Q: prewarm_sector_macro per (sector, date), priority 10
+        W->>Q: enrich_movement per movement, priority 20–89, blocked by its macro job
+    end
+    loop each (sector, date)
+        W->>Q: claim prewarm_sector_macro
+        W->>E: Hard-tier search, stored in news_query_cache
+    end
+    loop enrich_movement, in priority order
+        W->>Q: claim (unblocked once its macro job is done)
+        W->>Q: take one unit of the run's budget, or defer
+        W->>E: Easy and Medium searches (Hard is a cache hit)
+        W->>L: one scoring call
+        W->>W: COMPLETE, or PARTIAL plus a follow-up at window close
+    end
+    W->>Q: last job finishes, so the run is marked finished
+```
+
+The first stage is cheap fan-out. `schedule_nightly` opens the run's `prewarm_runs`
+row, selects the universe, and enqueues one `refresh_prices` job per `PRICE_BATCH_SIZE`
+symbols, most popular first. Each `refresh_prices` job batch-downloads its chunk's
+prices: the 45-day window for tickers it already has, a full year and the company
+profile for new ones. It takes each ticker's ingestion claim, as an interactive
+ingestion does; if a user's ingestion holds it, the ticker is skipped, because that
+run is doing the same work. It then refreshes bars and movements. For every movement
+that needs news, under the same rule as the on-demand path, it enqueues the sector's
+`prewarm_sector_macro` job and an `enrich_movement` job blocked behind it. One bad
+symbol never fails a chunk. An unknown symbol is recorded as a permanent failure,
+which removes it from future universes. Only a chunk in which every symbol failed
+transiently raises, so the queue retries the whole chunk.
+
+The second stage is enrichment, the expensive part. `prewarm_sector_macro` runs one
+sector's Hard-tier search for one date. Its only product is the cache row, so every
+enrichment in that sector and date finds its macro search already answered. The
+enrichments then drain in priority order.
+
+### Priorities
+
+Lower runs first:
+
+- 0: interactive, a user is waiting.
+- 5: the nightly fan-out, `schedule_nightly` and `refresh_prices`. They are cheap, and
+  everything else waits on them.
+- 10: `prewarm_sector_macro`, one search that unblocks many enrichments.
+- 20–59: nightly enrichment for tickers with demand.
+- 60–89: nightly enrichment for seed tickers nobody has asked for yet.
+- 90: PARTIAL follow-ups, which wait for a fixed time anyway.
+
+`prewarm.enrichment_priority` maps popularity and move size into the 20–59 band. Each
+power-of-two step of popularity is one bucket, and four slots within a bucket order
+moves of 10%+, 5%+, 3%+ and smaller. Popularity therefore decides, and move size only
+breaks ties. A ticker asked for once a day lands around 44–47; one asked for fifty
+times a day lands at the top of the band.
+
+When someone requests a ticker whose movements are still owed news, those enrichments
+are enqueued at priority 0 under the same `enrich:{id}` key as the nightly job. If the
+nightly job is still queued, it is pulled forward rather than duplicated.
+
+### Rate limits
+
+The bottleneck is the providers' rate limits, not CPU. Every outbound call acquires a
+token from its provider's bucket first (`app/services/ratelimit.py`), configured by
+`EXA_MAX_RPS`, `ANTHROPIC_MAX_RPM` and `YFINANCE_MAX_RPS`, allowing bursts of up to one
+second's worth. On a 429, Exa and Anthropic also stop their bucket for the
+`Retry-After` time (10 seconds if none is given). Every concurrent call to that
+provider in the process then waits, instead of each discovering the 429 separately.
+The provider's own short retries cover a blip; past that, the movement fails, its job
+fails, and the queue retries it with backoff instead of burning retries in a tight
+loop.
+
+The buckets are per process. With N worker processes, configure each with the
+provider's limit divided by N. The upgrade path is a shared bucket, either a row per
+provider in Postgres updated with the queue's conditional-UPDATE pattern or a Redis
+token bucket. Neither is built, because at one or two workers the arithmetic is easy.
+
+### The budget
+
+`PREWARM_MAX_ENRICHMENTS_PER_RUN` (300) caps how many movements a run enriches. Every
+candidate is enqueued. Each takes one unit of budget when it starts, through the
+atomic conditional UPDATE on `prewarm_runs`, and not when it is enqueued, so the budget
+is spent in priority order. A job that finds the budget gone succeeds with
+`progress = {"outcome": "deferred"}`. Its movement stays PENDING and is enriched on
+the next night or as soon as someone asks for its ticker. The run counts used and
+deferred units, and both show in `/admin/queue` and in `prewarm_run_finished`.
+Interactive jobs and PARTIAL follow-ups never pay. Neither does a nightly job that a
+user's request has pulled forward to priority 0. The job records that it has paid in
+its payload, in the same transaction, so a retried job does not pay twice.
+
+### Observability
+
+The queue logs `job_enqueued`, `job_claimed`, `job_succeeded`, `job_failed` (retry
+scheduled) and `job_dead`. A run logs `prewarm_run_started` (universe size, chunks,
+budget), `refresh_chunk_complete` per chunk, `enrichment_deferred` per deferral, and
+`prewarm_run_finished` (universe size, movements found, enrichments queued, used and
+deferred, duration). The existing `exa_search` and `llm_call` events carry cost and
+token usage. `GET /admin/queue` shows the same state on demand.
+
+## Trade-offs
+
+Postgres instead of Redis and Celery. One more table instead of one more service, and
+a job can commit atomically with the data that caused it. A broker would offer higher
+throughput and ready-made tooling, but throughput is capped by the providers' rate
+limits at a few jobs per second, which Postgres handles easily. The queue is small
+enough to read in one sitting, which matters for a project whose design has to be
+explained.
+
+Per-process instead of shared rate limits. Correct with one worker and easy to
+configure with a few. Past that, a shared bucket is the next step.
+
+No holiday calendar. A holiday run costs a few cheap price calls and finds nothing,
+and a calendar is a dependency with a list to maintain.
+
+Sync instead of batch scoring. Overnight scoring has no user waiting, so it suits the
+Anthropic Message Batches API, at roughly half the per-token price with results
+arriving within hours. Scoring is already split into `build_scoring_request` and
+`apply_scoring_result` to keep that option open. Batching is not built: it adds a job
+that submits and a job that polls, and the nightly run takes longer to finish.
+Interactive scoring would stay synchronous either way.
+
+A sector-level macro summary. Sharing the Hard-tier cache row across a sector requires
+a summary question that names no company, so the scorer reads a sector-level summary of
+a macro article instead of one written for this company's move. It still knows the
+company and the move from its own prompt. The trade is one macro search per sector and
+date instead of one per ticker.

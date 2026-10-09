@@ -22,7 +22,7 @@ from pydantic import BaseModel
 from sqlalchemy import event
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool, StaticPool
 
 from app.core.config import settings
 from app.db.base import Base
@@ -30,6 +30,7 @@ from app.db.session import get_session
 from app.main import create_app
 from app.models.jobs import Job
 from app.services import prices as price_service
+from app.services import ratelimit
 from app.services.llm import LLMProvider, get_llm_client
 from app.services.peers import PeerSet
 from app.services.prices import PriceBarData, PriceHistory, TickerProfile
@@ -165,6 +166,19 @@ def stub_llm() -> StubLLM:
 
 
 @pytest.fixture(autouse=True)
+def fresh_rate_limits(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unthrottled, fresh buckets per test.
+
+    Fresh because a bucket holds an asyncio lock, which must not outlive a
+    test's event loop; unthrottled because no test but the rate-limit tests
+    should spend time waiting for tokens.
+    """
+    for name in ("exa_max_rps", "anthropic_max_rpm", "yfinance_max_rps"):
+        monkeypatch.setattr(settings, name, 1e9)
+    ratelimit.reset()
+
+
+@pytest.fixture(autouse=True)
 def offline(monkeypatch: pytest.MonkeyPatch) -> None:
     """No network in tests: fixture news provider, stubbed price fetch."""
     monkeypatch.setattr(settings, "news_provider", "fixture")
@@ -226,13 +240,19 @@ async def session_factory() -> AsyncGenerator[async_sessionmaker[AsyncSession], 
         yield factory
 
 
-def _use_real_sqlite_transactions(engine) -> None:
+def _use_real_sqlite_transactions(engine, *, immediate: bool = False) -> None:
     """Make SQLite begin transactions when SQLAlchemy does, not on first write.
 
     The sqlite3 driver defers BEGIN until the first INSERT/UPDATE, so a
     SAVEPOINT issued before any write opens the transaction itself and its
     RELEASE commits it -- a rolled-back enqueue would survive. Postgres has no
     such quirk. This is SQLAlchemy's documented recipe for it.
+
+    `immediate` takes the write lock at BEGIN. With several connections, a
+    WAL transaction that starts reading and later writes fails at once if
+    another connection committed in between ("database is locked"), where
+    Postgres would simply proceed; taking the lock up front makes the other
+    connection wait instead.
     """
 
     @event.listens_for(engine.sync_engine, "connect")
@@ -241,7 +261,32 @@ def _use_real_sqlite_transactions(engine) -> None:
 
     @event.listens_for(engine.sync_engine, "begin")
     def _begin(connection) -> None:
-        connection.exec_driver_sql("BEGIN")
+        connection.exec_driver_sql("BEGIN IMMEDIATE" if immediate else "BEGIN")
+
+
+@pytest.fixture
+async def db(tmp_path) -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
+    """A file-backed SQLite database with a connection per session.
+
+    For tests where two sessions write concurrently (a worker's keepalive
+    beside its handler), which the shared in-memory connection cannot do.
+    """
+    engine = create_async_engine(
+        f"sqlite+aiosqlite:///{tmp_path / 'worker.db'}",
+        poolclass=NullPool,
+        connect_args={"timeout": 10},  # wait for a lock rather than fail
+    )
+    _use_real_sqlite_transactions(engine, immediate=True)
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _wal(dbapi_connection, _record) -> None:
+        # Readers do not block on the writer, much like Postgres.
+        dbapi_connection.execute("PRAGMA journal_mode=WAL")
+
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+    yield async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    await engine.dispose()
 
 
 @pytest.fixture

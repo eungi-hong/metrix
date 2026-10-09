@@ -15,6 +15,16 @@ claim priority-0 jobs and are idle otherwise. The remaining loops claim
 anything, priority 0 included, so interactive work drains faster still when
 there is no nightly backlog.
 
+The nightly schedule
+--------------------
+Each worker also runs a small scheduler. Whenever it wakes, it enqueues the
+most recent scheduled run (`schedule.latest_run_at`) unless that trading date
+already has one, then sleeps until the next. Waking for the most recent run,
+rather than only at the exact instant, means a worker that was down at 17:15
+catches up when it starts. Every replica may do this: the job is deduplicated
+on `nightly:{date}`, and the run itself is unique per trading date, so a date
+is never run twice.
+
 Shutdown
 --------
 On SIGTERM or SIGINT the loops stop claiming and in-flight jobs get
@@ -33,18 +43,22 @@ import random
 import signal
 import socket
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
 from app.db.session import SessionLocal, dispose_engine
-from app.models.jobs import Job, JobKind
-from app.services import queue
+from app.models.jobs import Job, JobKind, JobSource
+from app.services import prewarm, queue, schedule
 from app.services.job_handlers import HANDLERS, Handler, JobContext
 from app.services.llm import LLMProvider, get_llm_client
 
 logger = get_logger(__name__)
+
+# Longest single sleep of the scheduler loop.
+SCHEDULER_MAX_SLEEP_SECONDS = 300.0
 
 
 class Worker:
@@ -87,16 +101,19 @@ class Worker:
             asyncio.create_task(self._loop(interactive=i < self._interactive_slots))
             for i in range(self._concurrency)
         ]
-        reaper = asyncio.create_task(self._reap_loop())
+        background = [asyncio.create_task(self._reap_loop())]
+        if settings.prewarm_schedule_enabled and JobKind.SCHEDULE_NIGHTLY in self._handlers:
+            background.append(asyncio.create_task(self._schedule_loop()))
 
         await self._stopping.wait()
-        reaper.cancel()
+        for task in background:
+            task.cancel()
         _, unfinished = await asyncio.wait(
             loops, timeout=settings.worker_shutdown_timeout_seconds
         )
         for task in unfinished:
             task.cancel()  # each loop releases its own job on cancellation
-        await asyncio.gather(*loops, reaper, return_exceptions=True)
+        await asyncio.gather(*loops, *background, return_exceptions=True)
         logger.info("worker_stopped", worker=self.worker_id, released=len(unfinished))
 
     def stop(self) -> None:
@@ -194,6 +211,40 @@ class Worker:
             except Exception as exc:
                 logger.error("worker_reap_failed", error=str(exc))
             await asyncio.sleep(settings.job_reap_interval_seconds)
+
+    async def schedule_tick(self, now: datetime | None = None) -> Job | None:
+        """Enqueue the most recent scheduled run if its date has no run yet."""
+        now = now or datetime.now(timezone.utc)
+        due = schedule.latest_run_at(now)
+        trading_date = schedule.trading_date(due)
+        async with self._session_factory() as session:
+            if await prewarm.run_for(session, trading_date) is not None:
+                return None
+            job = await queue.enqueue(
+                session,
+                JobKind.SCHEDULE_NIGHTLY,
+                {"trading_date": trading_date.isoformat()},
+                priority=queue.PRIORITY_NIGHTLY_FANOUT,
+                dedupe_key=queue.nightly_key(trading_date),
+                source=JobSource.SCHEDULED,
+                run_after=queue.jittered(due),
+                now=now,
+            )
+            await session.commit()
+            return job
+
+    async def _schedule_loop(self) -> None:
+        while not self._stopping.is_set():
+            now = datetime.now(timezone.utc)
+            try:
+                await self.schedule_tick(now)
+            except Exception as exc:
+                logger.error("schedule_tick_failed", error=str(exc))
+            until_next = (schedule.next_run_after(now) - now).total_seconds()
+            # Sleep in bounded steps, so a changed system clock is noticed.
+            delay = min(max(until_next, 0.0), SCHEDULER_MAX_SLEEP_SECONDS)
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(self._stopping.wait(), timeout=delay)
 
     async def _release(self, job: Job) -> None:
         try:

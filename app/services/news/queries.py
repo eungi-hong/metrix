@@ -117,10 +117,26 @@ def build_tier_queries(
     if medium:
         queries.append((SEARCH_TIER_MEDIUM, request(medium, company_summary)))
 
-    queries.append(
-        (SEARCH_TIER_HARD, request(_hard_query(context), _hard_summary(context)))
-    )
+    queries.append((SEARCH_TIER_HARD, hard_tier_request(context.sector, context.movement_date)))
     return queries
+
+
+def hard_tier_request(sector: str | None, movement_date: date) -> NewsSearchRequest:
+    """The Hard-tier search for any movement in `sector` on `movement_date`.
+
+    A function of sector and date alone -- that is what lets every ticker in
+    the sector share its cache row, and what lets the nightly run's
+    `prewarm_sector_macro` job warm that row before any movement asks for it.
+    """
+    start, end = search_window(movement_date)
+    sector = sector or HARD_TIER_DEFAULT_SECTOR
+    return NewsSearchRequest(
+        query=_hard_query(sector),
+        start=start,
+        end=end,
+        num_results=settings.max_candidates_per_tier,
+        summary_query=_hard_summary(sector, movement_date),
+    )
 
 
 def _easy_query(context: MovementContext) -> str:
@@ -153,13 +169,12 @@ def _medium_query(context: MovementContext, peers: PeerSet) -> str | None:
     )
 
 
-def _hard_sector(context: MovementContext) -> str:
-    return context.sector or "US equity"
+# What the Hard tier searches for when yfinance gave the ticker no sector.
+HARD_TIER_DEFAULT_SECTOR = "US equity"
 
 
-def _hard_query(context: MovementContext) -> str:
+def _hard_query(sector: str) -> str:
     """Macro / political: deliberately company-free, so the cache is shared."""
-    sector = _hard_sector(context)
     return (
         f"macroeconomic and political news moving {sector} stocks: Federal Reserve "
         f"interest rate decisions, inflation and jobs data, tariffs and trade policy, "
@@ -168,12 +183,11 @@ def _hard_query(context: MovementContext) -> str:
     )
 
 
-def _hard_summary(context: MovementContext) -> str:
+def _hard_summary(sector: str, movement_date: date) -> str:
     """Company-free like the query: it is part of the cache key too."""
     return (
         f"Which macroeconomic, political or regulatory developments in this "
-        f"article would move {_hard_sector(context)} stocks around "
-        f"{context.movement_date.isoformat()}?"
+        f"article would move {sector} stocks around {movement_date.isoformat()}?"
     )
 
 

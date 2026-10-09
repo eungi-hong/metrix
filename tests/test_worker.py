@@ -1,25 +1,20 @@
 """Tests for the worker and the job handlers, end to end on SQLite.
 
-These use a file-backed database with a connection per session rather than the
-shared in-memory one: the worker's keepalive writes while a handler's
+These use the file-backed `db` fixture (see conftest) rather than the shared
+in-memory database: the worker's keepalive writes while a handler's
 transaction is open, which needs real, separate connections.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
 
 import pytest
 import sqlalchemy as sa
-from sqlalchemy import event
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import NullPool
 
 from app.core.config import settings
 from app.core.errors import PriceDataError, TickerNotFoundError
-from app.db.base import Base
 from app.models.enums import IngestStatus, NewsStatus
 from app.models.jobs import Job, JobKind, JobSource, JobStatus
 from app.models.market import Movement, Ticker
@@ -27,28 +22,7 @@ from app.services import ingestion, queue
 from app.services import prices as price_service
 from app.services.news.queries import news_window_closes_at
 from app.worker import Worker
-from tests.conftest import _use_real_sqlite_transactions
 from tests.test_freshness import history_ending_on
-
-
-@pytest.fixture
-async def db(tmp_path) -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
-    engine = create_async_engine(
-        f"sqlite+aiosqlite:///{tmp_path / 'worker.db'}",
-        poolclass=NullPool,
-        connect_args={"timeout": 10},  # wait for a lock rather than fail
-    )
-    _use_real_sqlite_transactions(engine)
-
-    @event.listens_for(engine.sync_engine, "connect")
-    def _wal(dbapi_connection, _record) -> None:
-        # Readers do not block on the writer, much like Postgres.
-        dbapi_connection.execute("PRAGMA journal_mode=WAL")
-
-    async with engine.begin() as connection:
-        await connection.run_sync(Base.metadata.create_all)
-    yield async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
-    await engine.dispose()
 
 
 @pytest.fixture
@@ -236,10 +210,17 @@ async def test_the_interactive_lane_leaves_background_work_alone(db, worker):
     assert (await worker.run_once()).dedupe_key == "ingest:LATER"
 
 
-async def test_kinds_without_a_handler_are_not_claimed(db, worker):
-    await enqueue(db, JobKind.REFRESH_PRICES, {"symbols": ["A"]}, "prices:chunk-0")
+async def test_kinds_without_a_handler_are_not_claimed(db, stub_llm):
+    """A worker from an older deploy leaves newer kinds for one that knows them."""
+    from app.services.job_handlers import HANDLERS
 
-    assert await worker.run_once() is None
+    old_worker = Worker(
+        session_factory=db, llm=stub_llm,
+        handlers={JobKind.INGEST_TICKER: HANDLERS[JobKind.INGEST_TICKER]},
+    )
+    await enqueue(db, JobKind.REFRESH_PRICES, {"entries": []}, "prices:chunk-0")
+
+    assert await old_worker.run_once() is None
     assert (await jobs(db))[0].status == JobStatus.QUEUED
 
 

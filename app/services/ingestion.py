@@ -160,6 +160,40 @@ def needs_enrichment(
     return True
 
 
+def needs_enrichment_clause(now: datetime) -> sa.ColumnElement[bool]:
+    """`needs_enrichment` as a SQL condition (without `retry_exhausted`).
+
+    The two must agree; a test holds them to the same answers.
+    """
+    return sa.or_(
+        Movement.news_status == NewsStatus.PENDING,
+        sa.and_(
+            Movement.news_status == NewsStatus.PARTIAL,
+            Movement.news_window_closes_at <= now,
+        ),
+        sa.and_(
+            Movement.news_status == NewsStatus.FAILED,
+            Movement.news_attempts < settings.news_max_attempts,
+        ),
+    )
+
+
+async def enrichable_movements(
+    session: AsyncSession, ticker: Ticker, *, limit: int, now: datetime | None = None
+) -> list[Movement]:
+    """The ticker's movements still owed news, largest moves first."""
+    return list(
+        (
+            await session.scalars(
+                sa.select(Movement)
+                .where(Movement.ticker_id == ticker.id, needs_enrichment_clause(now or _now()))
+                .order_by(Movement.abs_return.desc(), Movement.date.desc())
+                .limit(limit)
+            )
+        ).all()
+    )
+
+
 async def get_ticker(session: AsyncSession, symbol: str) -> Ticker | None:
     return await session.scalar(
         sa.select(Ticker).where(Ticker.symbol == symbol.strip().upper())

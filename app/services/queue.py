@@ -65,9 +65,12 @@ from app.models.jobs import (
 
 logger = get_logger(__name__)
 
-# Priority bands, lower runs first. Interactive work is a band of its own so
-# the worker's interactive lane can claim exactly it (`max_priority=0`).
+# Priority bands, lower runs first; `app.services.prewarm` documents the full
+# table. Interactive work is a band of its own so the worker's interactive
+# lane can claim exactly it (`max_priority=0`).
 PRIORITY_INTERACTIVE = 0
+PRIORITY_NIGHTLY_FANOUT = 5
+PRIORITY_MACRO = 10
 PRIORITY_FOLLOWUP = 90
 
 # Retry delays are scaled by a random factor in [1 - f, 1 + f], so jobs that
@@ -107,6 +110,22 @@ def macro_key(sector: str | None, day: date) -> str:
     return f"macro:{(sector or '').strip() or UNKNOWN_SECTOR}:{day.isoformat()}"
 
 
+def nightly_key(trading_date: date) -> str:
+    return f"nightly:{trading_date.isoformat()}"
+
+
+def prices_key(trading_date: date, chunk: int) -> str:
+    return f"prices:{trading_date.isoformat()}:{chunk}"
+
+
+def jittered(at: datetime, *, not_before: datetime | None = None) -> datetime:
+    """`at` moved by up to `PREWARM_JITTER_SECONDS` either way, so jobs
+    scheduled for one instant do not all become due in the same second."""
+    spread = settings.prewarm_jitter_seconds
+    moved = at + timedelta(seconds=random.uniform(-spread, spread))
+    return max(moved, not_before) if not_before is not None else moved
+
+
 # ---------------------------------------------------------------- enqueue
 
 
@@ -129,6 +148,38 @@ async def enqueue(
     Flushes but does not commit: the caller's transaction decides, so a job
     can be committed atomically with the data that made it necessary.
     """
+    job, _ = await enqueue_checked(
+        session,
+        kind,
+        payload,
+        priority=priority,
+        dedupe_key=dedupe_key,
+        source=source,
+        run_after=run_after,
+        blocked_by_key=blocked_by_key,
+        run_id=run_id,
+        max_attempts=max_attempts,
+        now=now,
+    )
+    return job
+
+
+async def enqueue_checked(
+    session: AsyncSession,
+    kind: JobKind,
+    payload: dict[str, Any],
+    *,
+    priority: int,
+    dedupe_key: str,
+    source: JobSource,
+    run_after: datetime | None = None,
+    blocked_by_key: str | None = None,
+    run_id: int | None = None,
+    max_attempts: int | None = None,
+    now: datetime | None = None,
+) -> tuple[Job, bool]:
+    """`enqueue`, also saying whether a new job was created (True) or the
+    request was folded into an existing one (False)."""
     now = now or _now()
     run_after = run_after or now
 
@@ -168,9 +219,9 @@ async def enqueue(
                 run_after=run_after.isoformat(),
             )
             await _notify(session, job.id)
-            return job
+            return job, True
 
-    return await _fold_into(session, existing, priority=priority, run_after=run_after)
+    return await _fold_into(session, existing, priority=priority, run_after=run_after), False
 
 
 async def _fold_into(
@@ -535,14 +586,24 @@ def retry_delay(attempts: int, rng: random.Random | None = None) -> timedelta:
 # ------------------------------------------------------------ prewarm runs
 
 
-async def take_enrichment_budget(session: AsyncSession, run_id: int) -> bool:
+BUDGET_TAKEN = "budget_taken"
+
+
+async def take_enrichment_budget(
+    session: AsyncSession, run_id: int, *, job: Job | None = None
+) -> bool:
     """Spend one unit of a run's enrichment budget. False if it is exhausted.
 
     One conditional UPDATE, so jobs from parallel chunks cannot jointly
     overspend. Commits immediately: on Postgres the UPDATE holds the run's row
     lock until commit, and holding it through an enrichment would serialize
     every enrichment in the run behind it.
+
+    With `job`, the job is marked as having paid (`payload["budget_taken"]`)
+    in the same transaction, so a retry of that job does not pay twice.
     """
+    if job is not None and job.payload.get(BUDGET_TAKEN):
+        return True
     result = await session.execute(
         sa.update(PrewarmRun)
         .where(
@@ -552,8 +613,38 @@ async def take_enrichment_budget(session: AsyncSession, run_id: int) -> bool:
         .values(enrichments_used=PrewarmRun.enrichments_used + 1)
         .execution_options(synchronize_session=False)
     )
+    taken = bool(result.rowcount)
+    if taken and job is not None:
+        payload = {**job.payload, BUDGET_TAKEN: True}
+        await session.execute(
+            sa.update(Job)
+            .where(Job.id == job.id)
+            .values(payload=payload)
+            .execution_options(synchronize_session=False)
+        )
+        job.payload = payload
     await session.commit()
-    return bool(result.rowcount)
+    return taken
+
+
+async def add_to_run(session: AsyncSession, run_id: int, **increments: int) -> None:
+    """Add to a run's counters atomically, e.g. `movements_found=3`. Flushes.
+
+    Increments rather than assignments, because several price chunks report
+    into one run at once.
+    """
+    values = {
+        name: getattr(PrewarmRun, name) + amount
+        for name, amount in increments.items()
+        if amount
+    }
+    if values:
+        await session.execute(
+            sa.update(PrewarmRun)
+            .where(PrewarmRun.id == run_id)
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
 
 
 async def finish_run_if_done(

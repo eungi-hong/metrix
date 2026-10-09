@@ -14,6 +14,7 @@ import anthropic
 from app.core.config import settings
 from app.core.errors import ConfigurationError, LLMError
 from app.core.logging import get_logger
+from app.services import ratelimit
 from app.services.llm.base import LLMProvider, MessageParam, T
 
 logger = get_logger(__name__)
@@ -61,6 +62,7 @@ class AnthropicProvider(LLMProvider):
         max_tokens: int | None = None,
     ) -> T:
         client = self._require_client()
+        await ratelimit.bucket("anthropic").acquire()
         try:
             response = await client.messages.parse(
                 model=self.model,
@@ -89,6 +91,7 @@ class AnthropicProvider(LLMProvider):
         max_tokens: int | None = None,
     ) -> str:
         client = self._require_client()
+        await ratelimit.bucket("anthropic").acquire()
         try:
             response = await client.messages.create(
                 model=self.model,
@@ -115,6 +118,11 @@ class AnthropicProvider(LLMProvider):
             await self._client.close()
 
     def _error(self, exc: anthropic.APIError) -> LLMError:
+        if isinstance(exc, anthropic.RateLimitError):
+            # The SDK has already retried; slow every call in this process.
+            ratelimit.bucket("anthropic").backoff(
+                ratelimit.retry_after_seconds(exc.response.headers.get("retry-after"))
+            )
         # A rejected key fails the same way on every retry.
         permanent = isinstance(
             exc, (anthropic.AuthenticationError, anthropic.PermissionDeniedError)
