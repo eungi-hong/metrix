@@ -7,6 +7,7 @@ about movement detection or cost control is a hardcoded magic number.
 from __future__ import annotations
 
 import json
+import re
 from functools import lru_cache
 from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -274,6 +275,13 @@ class Settings(BaseSettings):
         default="",
         description="Comma-separated browser origins allowed to call the API. "
         "Leave empty to emit no CORS headers; set http://localhost:5173 for the local frontend.",
+    )
+    cors_allowed_origin_regex: str = Field(
+        default="",
+        description="Also allow origins matching this regular expression (matched "
+        "in full), for preview deployments whose URL changes on every push. Keep it "
+        "specific to this project, e.g. ^https://metrix-[a-z0-9-]+-eungi-hong\\.vercel\\.app$, "
+        "never .*\\.vercel\\.app, which would let anyone's Vercel app call the API.",
     )
     plan_limits_json: Annotated[dict[str, PlanLimits], NoDecode] = Field(
         default_factory=lambda: dict(DEFAULT_PLAN_LIMITS),
@@ -654,6 +662,16 @@ class Settings(BaseSettings):
             ZoneInfo(v)
         except (ZoneInfoNotFoundError, ValueError) as exc:
             raise ValueError(f"PREWARM_TIMEZONE '{v}' is not a known IANA time zone") from exc
+        return v
+
+    @field_validator("cors_allowed_origin_regex")
+    @classmethod
+    def _require_valid_origin_regex(cls, v: str) -> str:
+        # Fail at startup, not on the first cross-origin request.
+        try:
+            re.compile(v)
+        except re.error as exc:
+            raise ValueError(f"CORS_ALLOWED_ORIGIN_REGEX is not a valid regex: {exc}") from exc
         return v
 
     @field_validator("database_url")

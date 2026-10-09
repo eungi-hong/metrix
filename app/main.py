@@ -56,12 +56,15 @@ def create_app() -> FastAPI:
     )
     # The API remains same-origin by default. Local browser clients opt in via
     # CORS_ALLOWED_ORIGINS; this is intentionally a narrow allow-list rather
-    # than a permissive development wildcard.
+    # than a permissive development wildcard. CORS_ALLOWED_ORIGIN_REGEX adds
+    # preview deployments, whose URLs change on every push.
     cors_origins = [origin.strip() for origin in settings.cors_allowed_origins.split(",") if origin.strip()]
-    if cors_origins:
+    cors_origin_regex = settings.cors_allowed_origin_regex or None
+    if cors_origins or cors_origin_regex:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=cors_origins,
+            allow_origin_regex=cors_origin_regex,
             allow_credentials=False,
             allow_methods=["GET", "POST", "OPTIONS"],
             allow_headers=["Authorization", "Content-Type"],
