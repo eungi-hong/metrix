@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from app.api.deps import CurrentUser, LLMDep, SessionDep
-from app.core.errors import SpendCapReached, UpstreamError
+from app.core.errors import UpstreamError, WorkDeferred
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.services import quotas
 from app.services.chat import ConversationNotFound, answer_question
@@ -31,8 +31,8 @@ async def chat(
     conversation.
 
     Each turn counts against `chat_per_minute` and `chat_per_day`, and is
-    given back if the answer fails on our side (the model is down, or the
-    daily spend cap is reached).
+    given back if the answer fails on our side (the model is down or too busy,
+    or the daily spend cap is reached).
     """
     if not request.question.strip():
         raise HTTPException(status_code=422, detail="`question` must not be blank.")
@@ -48,7 +48,7 @@ async def chat(
         raise HTTPException(
             status_code=404, detail=f"No conversation with id {request.conversation_id}."
         ) from None
-    except (UpstreamError, SpendCapReached):
+    except (UpstreamError, WorkDeferred):
         await quotas.refund(principal, Quota.CHAT_PER_MINUTE)
         await quotas.refund(principal, Quota.CHAT_PER_DAY)
         raise

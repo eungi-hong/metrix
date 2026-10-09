@@ -1,4 +1,4 @@
-import { ArrowDownRight, ArrowUpRight, ChartNoAxesCombined, ChevronDown, Database, Info } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, ChartNoAxesCombined, Database, Info } from "lucide-react";
 import { useMemo, useState } from "react";
 import { Line, LineChart, ReferenceDot, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import type { Movement, PriceBar, TickerDetail } from "../api/types";
@@ -27,13 +27,13 @@ function MovementMarker({ cx, cy, movement, selected, onSelect }: { cx?: number;
 
 function ChartTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
-  const row = payload[0].payload as PriceBar;
+  const row = payload[0].payload as PriceBar & { movement?: Movement };
   return <div className="rounded-lg border border-line bg-white px-3 py-2 shadow-lg"><p className="text-[11px] text-mute">{shortDate(label)}</p><p className="mt-0.5 text-sm font-semibold">{currency(row.adj_close)}</p>{row.movement && <p className={`mt-1 text-xs font-semibold ${row.movement.direction === "up" ? "text-emerald-700" : "text-red-700"}`}>{row.movement.direction === "up" ? "▲" : "▼"} {pct(row.movement.daily_return_pct, true)} movement</p>}</div>;
 }
 
 export function PriceChart({ data, selectedMovement, onSelectMovement }: { data: TickerDetail | null; selectedMovement: Movement | null; onSelectMovement: (movement: Movement) => void }) {
   const [range, setRange] = useState<Range>("All");
-  const prices = data?.prices ?? [];
+  const prices = useMemo(() => data?.prices ?? [], [data?.prices]);
   const visiblePrices = useMemo(() => filteredPrices(prices, range), [prices, range]);
   const visibleMoves = useMemo(() => (data?.movements ?? []).filter((move) => visiblePrices.some((bar) => bar.date === move.date)), [data?.movements, visiblePrices]);
   const chartData = useMemo(() => {

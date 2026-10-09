@@ -753,10 +753,9 @@ TEST_REDIS_URL=redis://localhost:6380/15 pytest
   is exactly the distinction the Hard tier is trying to make downstream.
 - **Article bodies are whatever Exa returns** — usually a summary or the first ~2k
   characters, sometimes paywalled boilerplate. Scoring quality is bounded by that.
-- **Rate limits are per process.** Each worker process has its own token buckets, so
-  with N workers each should be configured for 1/N of a provider's limit. A shared
-  bucket in Postgres or Redis is the upgrade path; see
-  [docs/PREWARMING.md](docs/PREWARMING.md).
+- **Rate limits are only as shared as Redis is up.** While Redis is unreachable each
+  process limits itself to rate / `EXPECTED_PROCESSES`, which is right only if that
+  setting matches the number of processes; see [docs/FAIRNESS.md](docs/FAIRNESS.md).
 - **Tickers outside the pre-warm universe are still cold** on their first request.
 - **Relevance is unevaluated.** There is no labelled set, so "the scoring is good" is
   an assertion, not a measurement. See `SUBMISSION.md`.

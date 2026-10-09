@@ -513,7 +513,7 @@ async def test_a_refused_ingestion_keeps_its_prices_and_reports_the_refusal(db):
         assert await ingestion.claim_ingestion(session, ticker)
         result = await ingestion.ingest_ticker(session, "CAPI", llm=CappedLLM())
 
-    assert isinstance(result.spend_capped, SpendCapReached)
+    assert isinstance(result.deferred, SpendCapReached)
     assert any("News not fetched" in w for w in result.warnings)
     async with db() as session:
         ticker = await ingestion.get_ticker(session, "CAPI")

@@ -62,8 +62,9 @@ from app.core.errors import (
     MetrixError,
     NewsProviderError,
     PriceDataError,
-    SpendCapReached,
+    ProviderBusy,
     TickerNotFoundError,
+    WorkDeferred,
     is_permanent,
 )
 from app.core.logging import get_logger
@@ -104,10 +105,11 @@ class IngestResult:
     # The errors behind per-movement failures, so a queued job can decide
     # whether to retry. `warnings` is the human-readable side of the same.
     failures: list[MetrixError] = field(default_factory=list)
-    # Set when the spend cap stopped enrichment part-way. The prices are
-    # stored and the ticker is COMPLETE; the remaining movements stay as they
-    # were. A queued job re-raises it to be held until the cap resets.
-    spend_capped: SpendCapReached | None = None
+    # Set when enrichment had to stop part-way: the spend cap, or a provider
+    # too busy to wait for. The prices are stored and the ticker is COMPLETE;
+    # the remaining movements stay as they were. A queued job re-raises it,
+    # to be held (the cap) or retried (a busy provider).
+    deferred: WorkDeferred | None = None
 
 
 # Handlers pass one in to publish progress on their job (`Job.progress`).
@@ -268,9 +270,11 @@ async def ingest_ticker(
     `retry_exhausted` also retries movements that have failed
     `NEWS_MAX_ATTEMPTS` times; it is what `refresh=true` means for news.
 
-    If the spend cap refuses a call, enrichment stops there, the ticker is
-    still finished with its new prices, and the refusal is returned in
-    `result.spend_capped` rather than raised.
+    If enrichment has to wait (the spend cap, a busy provider), it stops
+    there, the ticker is still finished with its new prices, and the reason is
+    returned in `result.deferred` rather than raised. If the price fetch
+    itself has to wait, the claim is released and `ProviderBusy` raised: the
+    ticker is not marked failed, since nothing failed.
     """
     report = progress or _no_progress
     symbol = symbol.strip().upper()
@@ -284,6 +288,10 @@ async def ingest_ticker(
 
     try:
         history = await price_service.fetch_price_history(symbol)
+    except ProviderBusy:
+        await session.rollback()
+        await release_claim(session, symbol)
+        raise
     except (TickerNotFoundError, PriceDataError) as exc:
         ticker.ingest_status = IngestStatus.FAILED
         ticker.ingest_error = "price history unavailable"
@@ -318,13 +326,13 @@ async def ingest_ticker(
                 result.movements_enriched += 1
                 await session.commit()
                 await report({"stage": "enriching", "done": done, "total": len(budget)})
-        except SpendCapReached as exc:
+        except WorkDeferred as exc:
             # The prices are stored and committed; only news waits. Undo the
             # movement in progress (its attempt was not really made) and
-            # finish the ticker below, then let the caller see the refusal.
+            # finish the ticker below, then let the caller see why.
             await session.rollback()
             ticker = await get_or_create_ticker(session, symbol)
-            result.spend_capped = exc
+            result.deferred = exc
             result.warnings.append(f"News not fetched: {exc}")
 
     skipped = len(pending) - len(budget)
@@ -348,7 +356,7 @@ async def ingest_ticker(
         movements=result.movements_detected,
         enriched=result.movements_enriched,
         articles=result.articles_linked,
-        spend_capped=result.spend_capped is not None,
+        deferred=type(result.deferred).__name__ if result.deferred else None,
     )
     return result
 
@@ -672,10 +680,11 @@ async def _search_all_tiers(
         return_exceptions=True,
     )
 
-    # A refusal from the spend cap is not a failed search: the tiers that ran
-    # are cached, and the movement is retried tomorrow from where it stands.
+    # A search that had to wait (the spend cap, a busy provider) is not a
+    # failed search: the tiers that ran are cached, and the movement is tried
+    # again later from where it stands.
     for response in responses:
-        if isinstance(response, SpendCapReached):
+        if isinstance(response, WorkDeferred):
             raise response
 
     candidates: list[tuple[str, NewsCandidate]] = []
@@ -806,6 +815,20 @@ async def enrich_movement(
     if movement.news_status == NewsStatus.FAILED and result.failures:
         raise result.failures[-1]
     return result
+
+
+async def release_claim(session: AsyncSession, symbol: str) -> None:
+    """Give up the ingestion claim without recording a failure. Commits.
+
+    For an ingestion that had to wait rather than failed: COMPLETE again if
+    the ticker has data, PENDING if it never had any.
+    """
+    ticker = await get_ticker(session, symbol)
+    if ticker is not None and ticker.ingest_status == IngestStatus.RUNNING:
+        ticker.ingest_status = (
+            IngestStatus.COMPLETE if ticker.last_ingested_at else IngestStatus.PENDING
+        )
+        await session.commit()
 
 
 async def mark_ingestion_failed(

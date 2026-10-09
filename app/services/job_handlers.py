@@ -22,6 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.exc import StaleDataError
 
+from app.core.errors import WorkDeferred
 from app.core.logging import get_logger
 from app.models.jobs import Job, JobKind
 from app.models.market import Movement
@@ -79,13 +80,15 @@ async def handle_ingest_ticker(session: AsyncSession, job: Job, ctx: JobContext)
             retry_exhausted=bool(job.payload.get("retry_exhausted")),
             progress=ctx.report_progress,
         )
+    except WorkDeferred:
+        raise  # not a failure; ingest_ticker has released the claim
     except Exception as exc:
         await session.rollback()
         await ingestion.mark_ingestion_failed(session, symbol, exc)
         raise
-    if result.spend_capped is not None:
-        # The prices are in; the rest of the news waits for the cap to reset.
-        raise result.spend_capped
+    if result.deferred is not None:
+        # The prices are in; the rest of the news waits, held or retried.
+        raise result.deferred
 
 
 async def handle_enrich_movement(session: AsyncSession, job: Job, ctx: JobContext) -> None:

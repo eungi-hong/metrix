@@ -310,6 +310,42 @@ class RedisLimitStore:
 
 # --------------------------------------------------------- the facade
 
+REDIS_ERRORS = (RedisError, OSError, asyncio.TimeoutError)
+
+
+class Circuit:
+    """Whether to try Redis, for one component that can fall back without it.
+
+    After a failure it stays open (Redis skipped) for REDIS_RETRY_SECONDS, so
+    an outage costs one timeout rather than one per call, and logs
+    `limiter_fallback` at most once per LIMITER_FALLBACK_LOG_SECONDS.
+    """
+
+    def __init__(self, component: str, clock: Callable[[], float] = time.monotonic) -> None:
+        self.component = component
+        self._clock = clock
+        self._down_until = 0.0
+        self._last_logged = -math.inf
+
+    @property
+    def closed(self) -> bool:
+        """True when Redis should be tried."""
+        return self._clock() >= self._down_until
+
+    def fail(self, operation: str, exc: BaseException) -> None:
+        now = self._clock()
+        self._down_until = now + settings.redis_retry_seconds
+        if now - self._last_logged >= settings.limiter_fallback_log_seconds:
+            self._last_logged = now
+            logger.warning(
+                "limiter_fallback",
+                component=self.component,
+                operation=operation,
+                error=f"{type(exc).__name__}: {exc}"[:200],
+                retry_in_s=settings.redis_retry_seconds,
+                detail="Redis unreachable: limits are per process until it is back.",
+            )
+
 
 class Limiter:
     """Redis when it answers, this process's memory when it does not.
@@ -326,35 +362,20 @@ class Limiter:
     ) -> None:
         self.primary = primary
         self.fallback = fallback or MemoryLimitStore()
-        self._clock = clock
-        self._down_until = 0.0
-        self._last_logged = -math.inf
+        self._circuit = Circuit("quotas", clock)
 
     @property
     def degraded(self) -> bool:
         """True while falling back: Redis is configured but failing."""
-        return self.primary is not None and self._clock() < self._down_until
+        return self.primary is not None and not self._circuit.closed
 
     async def _run(self, operation: str, *args: Any, **kwargs: Any) -> Any:
-        if self.primary is not None and self._clock() >= self._down_until:
+        if self.primary is not None and self._circuit.closed:
             try:
                 return await getattr(self.primary, operation)(*args, **kwargs)
-            except (RedisError, OSError, asyncio.TimeoutError) as exc:
-                self._fail(operation, exc)
+            except REDIS_ERRORS as exc:
+                self._circuit.fail(operation, exc)
         return await getattr(self.fallback, operation)(*args, **kwargs)
-
-    def _fail(self, operation: str, exc: BaseException) -> None:
-        now = self._clock()
-        self._down_until = now + settings.redis_retry_seconds
-        if now - self._last_logged >= settings.limiter_fallback_log_seconds:
-            self._last_logged = now
-            logger.warning(
-                "limiter_fallback",
-                operation=operation,
-                error=f"{type(exc).__name__}: {exc}"[:200],
-                retry_in_s=settings.redis_retry_seconds,
-                detail="Redis unreachable: limits are per process until it is back.",
-            )
 
     async def gcra(self, key: str, *, limit: int, period: float, cost: int = 1) -> LimitResult:
         return await self._run("gcra", key, limit=limit, period=period, cost=cost)

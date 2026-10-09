@@ -17,6 +17,7 @@ from app.core.errors import (
     ConfigurationError,
     LLMError,
     MetrixError,
+    ProviderBusy,
     RateLimited,
     SpendCapReached,
     TickerNotFoundError,
@@ -79,6 +80,17 @@ def register_exception_handlers(app: FastAPI) -> None:
         headers["Retry-After"] = str(max(math.ceil(exc.result.retry_after), 1))
         return JSONResponse(
             status_code=429, content=_body("rate_limited", str(exc)), headers=headers
+        )
+
+    @app.exception_handler(ProviderBusy)
+    async def _provider_busy(request: Request, exc: ProviderBusy) -> JSONResponse:
+        # Our own shared rate limit, not the provider's outage, but to the
+        # caller it is the same: try again shortly.
+        wait = math.ceil((exc.retry_at - datetime.now(timezone.utc)).total_seconds())
+        return JSONResponse(
+            status_code=503,
+            content=_body("upstream_unavailable", str(exc)),
+            headers={"Retry-After": str(max(wait, 1))},
         )
 
     @app.exception_handler(SpendCapReached)

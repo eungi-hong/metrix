@@ -30,10 +30,11 @@ from app.core.config import settings
 from app.core.context import CallClass
 from app.core.errors import (
     MetrixError,
+    ProviderBusy,
     RateLimited,
-    SpendCapReached,
     SymbolNotListed,
     UpstreamError,
+    WorkDeferred,
 )
 from app.core.logging import get_logger
 from app.core.symbols import is_valid_symbol, normalize_symbol
@@ -371,12 +372,13 @@ async def _ensure_data(
                 result = await ingestion.ingest_ticker(
                     session, symbol, llm=llm, retry_exhausted=refresh
                 )
-            except UpstreamError:
+            except (UpstreamError, ProviderBusy):
                 await quotas.refund(principal, quota)  # our outage, not their request
                 raise
-        # A spend-capped run still stores the prices and returns normally;
-        # its warnings say which news was not fetched, and the quota is returned.
-        if result.spend_capped is not None:
+        # A run whose news had to wait (the spend cap, a busy provider) still
+        # stores the prices and returns normally; its warnings say which news
+        # was not fetched, and the quota is returned.
+        if result.deferred is not None:
             await quotas.refund(principal, quota)
         return _Ensured("ready", warnings=[*warnings, *result.warnings])
 
@@ -458,7 +460,7 @@ async def _enrich_what_is_owed(
                     await ingestion.enrich_movement(session, movement.id, llm=llm)
                 except MetrixError as exc:
                     warnings.append(f"{movement.date}: {exc}")
-                except SpendCapReached as exc:
+                except WorkDeferred as exc:
                     # Serve what is stored; the remaining movements stay as they were.
                     await session.rollback()
                     await quotas.refund(principal, quota)

@@ -376,15 +376,48 @@ class Settings(BaseSettings):
     )
 
     # -------------------------------------------------------- rate limits
-    # Per process. With N worker processes, set each to (provider limit) / N.
+    # Account-wide: shared through Redis by the API and every worker.
     exa_max_rps: float = Field(
-        default=5.0, gt=0, description="Exa requests per second, per process."
+        default=5.0,
+        gt=0,
+        description="Exa requests per second, across every process: the account's limit.",
     )
     anthropic_max_rpm: float = Field(
-        default=50.0, gt=0, description="Anthropic requests per minute, per process."
+        default=50.0,
+        gt=0,
+        description="Anthropic requests per minute, across every process: the account's limit.",
     )
     yfinance_max_rps: float = Field(
-        default=2.0, gt=0, description="yfinance requests per second, per process."
+        default=2.0,
+        gt=0,
+        description="Yahoo requests per second, across every process (Yahoo limits by "
+        "IP, which the processes share).",
+    )
+    background_rate_share: float = Field(
+        default=0.6,
+        ge=0,
+        le=1,
+        description="Fraction of each provider's rate background work may use. "
+        "Interactive calls may use all of it, so chat always has headroom.",
+    )
+    rate_limit_max_wait_seconds: float = Field(
+        default=60.0,
+        ge=0,
+        description="Longest a background call waits for its provider's rate limit. "
+        "Past that it fails as retryable, and the queue backs the job off.",
+    )
+    rate_limit_interactive_max_wait_seconds: float = Field(
+        default=5.0,
+        ge=0,
+        description="Longest a call a user is waiting on waits; past that, 503 "
+        "with Retry-After.",
+    )
+    expected_processes: int = Field(
+        default=2,
+        ge=1,
+        description="Processes calling providers (API plus workers). While Redis is "
+        "unreachable each limits itself to rate / this, so together they stay "
+        "near the account's limit.",
     )
 
     # -------------------------------------------------------------- spend

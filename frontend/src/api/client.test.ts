@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ApiError, MetrixApiClient, normalizeTickerResponse } from "./client";
+import { MetrixApiClient, normalizeTickerResponse } from "./client";
 import { readyDemo } from "../fixtures/demo";
 
 describe("ticker response normalisation", () => {
@@ -22,6 +22,6 @@ describe("MetrixApiClient", () => {
 
   it("surfaces quota responses with retry guidance", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "rate_limited", detail: "Over the chat quota." }), { status: 429, headers: { "Retry-After": "45", "Content-Type": "application/json" } })));
-    await expect(new MetrixApiClient("http://localhost:8000", "mtx_test").sendChat({ ticker: "NVDA", question: "Why?" })).rejects.toMatchObject<ApiError>({ kind: "quota", retryAfter: 45, status: 429 });
+    await expect(new MetrixApiClient("http://localhost:8000", "mtx_test").sendChat({ ticker: "NVDA", question: "Why?" })).rejects.toMatchObject({ kind: "quota", retryAfter: 45, status: 429 });
   });
 });

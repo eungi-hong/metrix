@@ -274,3 +274,69 @@ whoever asks, a ticker is refreshed at most once per `REFRESH_COOLDOWN_MINUTES` 
 inside the cooldown the stored data is served, with a note saying when a refresh is
 next possible, and nothing is charged. A refresh a few minutes after the last would
 find the same prices and the same news.
+
+## Provider rate limits
+
+Anthropic's and Exa's limits apply to the whole account, and Yahoo's to the IP: across
+the API, every worker, and chat and nightly traffic alike. Before this stage each
+process had its own token buckets, so N processes had to be configured with 1/N of a
+limit each, and nightly scoring could use the whole rate and starve chat.
+
+`EXA_MAX_RPS`, `ANTHROPIC_MAX_RPM` and `YFINANCE_MAX_RPS` now mean the account's limit.
+Each provider's limit is a GCRA schedule in Redis, allowing a burst of one second's
+worth, and every outbound call still goes through `await bucket(provider).acquire()`,
+so no call site changed. `acquire` does not poll: one Lua script reserves the caller's
+slot, the next free one, and returns how far away it is, and the caller sleeps exactly
+that long. Callers across processes are served in the order they asked, with no
+thundering herd when the limit frees up.
+
+### A reserve for users
+
+Background calls take a slot from a `{provider}:background` schedule running at
+`BACKGROUND_RATE_SHARE` (0.6) of the rate, then one from the provider's own schedule;
+interactive calls take only the latter. The brief described this as acquiring from
+both at once. That does not work with GCRA, which the tests showed: a schedule is a
+single timestamp and holds no gaps, so fifty queued background calls, each reserving a
+future slot on the provider's schedule, would push it five seconds ahead and put every
+interactive call behind them, the opposite of a reserve. Taking the background slot
+first, and only then joining the provider's schedule, means background traffic reaches
+it already paced at its share and can never build a backlog in front of users. A
+virtual-time test runs sixty background calls against three interactive ones: the
+background calls go out at exactly 5 a second of the 10, and each user call is served
+within one interval of arriving.
+
+### How long to wait
+
+A slot further away than the caller may wait is not reserved. A background call may
+wait `RATE_LIMIT_MAX_WAIT_SECONDS` (60); past that it raises `ProviderBusy`, and the
+queue retries the job with backoff. A user may wait only
+`RATE_LIMIT_INTERACTIVE_MAX_WAIT_SECONDS` (5), then gets 503 with `Retry-After`: chat
+and `wait=true` give back their quota. Like the spend cap, `ProviderBusy` is not a
+`MetrixError`, so the pipeline does not record it as a failed movement and use up the
+movement's attempts. An ingestion whose price fetch has to wait releases its ticker
+claim without marking the ticker failed.
+
+### Backing off together
+
+On a 429, Exa's and Anthropic's seams call `backoff`, which writes
+`metrix:ratelimit:{provider}:blocked_until` to Redis (never shortening a longer block
+already there). Every process honours it on its next reservation, instead of each
+discovering the 429 for itself. `backoff` stays synchronous for its callers: it blocks
+the calling process at once and writes to Redis in the background.
+
+### When Redis is down
+
+Each process falls back to its own `TokenBucket`s at rate / `EXPECTED_PROCESSES` (and
+the background share of that), so together the processes stay near the account's
+limit, and logs `limiter_fallback`. That is only right if `EXPECTED_PROCESSES` matches
+the number of processes calling providers (the API and each worker).
+
+## Failure policy
+
+| What fails | Callers see | Money | Fairness |
+|---|---|---|---|
+| Redis unreachable | Everything works. `/health` says `degraded`, `"redis": "unreachable"`. | Unaffected: the cap is in Postgres. | Quotas and provider limits per process, at most (processes × limit); demand deduplicated per process. |
+| Postgres unreachable | Most requests fail; `/health` says `degraded`. | No billable call is made: reserving spend fails closed. | Unaffected. |
+| A provider answers 429 | A short wait, shared by every process. Past the caller's limit: 503 for users, a retried job for the worker. | Unaffected. | Background still held to its share. |
+| Daily spend cap reached | Chat: 503 with `Retry-After` until 00:00 UTC. Tickers: stored data with a warning. Jobs: held to 00:00 UTC, no attempt used. | Bounded by estimate error only. | Interactive keeps the share background cannot reach. |
+| A user over a quota | 429 with `Retry-After` and `X-RateLimit-*`. | Unaffected. | Their quota only. |

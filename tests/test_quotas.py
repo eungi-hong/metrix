@@ -276,8 +276,6 @@ async def test_an_inline_ingestion_that_fails_upstream_is_refunded(session_facto
     monkeypatch.setattr(price_service, "fetch_price_history", down)
     async with await free_client(session_factory) as client:
         assert (await client.get("/tickers/DOWN", params={"wait": True})).status_code == 502
-        monkeypatch.undo()
-        plan(monkeypatch, cold_ingests_per_day=1)
         assert (await client.get("/tickers/UP")).status_code == 202, "the quota came back"
 
 
