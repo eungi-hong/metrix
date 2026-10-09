@@ -104,6 +104,7 @@ async def _resolve_via_llm(ticker: Ticker, llm: LLMProvider) -> PeerSet:
             "themes. Return only companies you are confident about."
         ),
         output_model=PeerSet,
+        operation="peers",
         max_tokens=1024,
     )
 

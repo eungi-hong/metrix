@@ -5,13 +5,39 @@ news that caused it — company news, competitor and industry news, and macro/po
 news — with an LLM deciding which articles actually explain the move and why.
 
 ```
-GET  /tickers/{symbol}   stock + news data, nested movement → articles → tier + rationale
-POST /chat               grounded, multi-turn Q&A over that data, with citations
-GET  /jobs/{id}          status, progress and errors of a queued background job
-GET  /health             liveness and which integrations are configured
-POST /admin/prewarm      start a pre-warm run now          (X-Admin-Token)
-GET  /admin/queue        queue health and the last run     (X-Admin-Token)
+GET    /tickers/{symbol}       stock + news data, nested movement → articles → tier + rationale
+POST   /chat                   grounded, multi-turn Q&A over that data, with citations
+GET    /conversations          your conversations; /conversations/{id} for one, with messages
+GET    /jobs/{id}              status, progress and errors of a queued background job
+GET    /health                 liveness and which integrations are configured
+POST   /admin/users            create a user; PATCH /admin/users/{id} to change plan or disable
+POST   /admin/users/{id}/keys  issue an API key; DELETE /admin/keys/{id} to revoke one
+POST   /admin/prewarm          start a pre-warm run now
+GET    /admin/queue            queue health and the last run
+GET    /admin/usage            the day's spend, by provider, operation and user
+GET    /admin/request-info     the peer and X-Forwarded-For as received, to set TRUSTED_PROXY_COUNT
 ```
+
+Everything except `/health` needs a key: `Authorization: Bearer mtx_...` for the API,
+`X-Admin-Token` for `/admin`. See [Authentication](#authentication).
+
+---
+
+## Live demo
+
+**<https://LIVE-DEMO-URL-PENDING>** (the frontend; the API it calls is on Railway)
+
+- Open the link and enter the demo key under the key icon. The key is shared with
+  reviewers alongside the submission, never in this repository. Without one, **View
+  demo data** shows the workspace on local fixture data.
+- With the key you can search any US-listed ticker. NVDA, AAPL, TSLA, MSFT and AMZN are
+  pre-warmed every weekday night; any other ticker is fetched on first request, and
+  the page shows the job's progress while it runs. Chat answers from the stored data.
+- The API serves pre-warmed tickers without a key too, but nothing that costs money:
+  new tickers, refreshes and chat need the key. Spend is capped per day.
+
+How it is deployed, how a merge to `main` reaches it, and the kill switch:
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ---
 
@@ -21,9 +47,39 @@ GET  /admin/queue        queue health and the last run     (X-Admin-Token)
 git clone https://github.com/eungi-hong/metrix.git && cd metrix
 cp .env.example .env          # then add your two API keys (below)
 docker compose up --build     # Postgres + migrations + API + worker
+
+# Every call needs a Metrix API key. Create a user and one:
+docker compose exec api python scripts/create_api_key.py --name "You" --plan pro
+export METRIX_API_KEY=mtx_...  # the key it printed; it is shown only once
 ```
 
-The API is on <http://localhost:8000>, interactive docs at <http://localhost:8000/docs>.
+The API is on <http://localhost:8000>, interactive docs at <http://localhost:8000/docs>
+(use **Authorize** there to paste the key).
+
+### Frontend workspace
+
+The React research workspace lives in [`frontend/`](frontend). It is a separate Vite
+application, so it does not alter the FastAPI routes or the backend's source of truth.
+
+```bash
+# in a second terminal, from the repository root
+cp frontend/.env.example frontend/.env
+# set CORS_ALLOWED_ORIGINS=http://localhost:5173 in the root .env for local browser access
+cd frontend
+npm install
+npm run dev
+```
+
+Open <http://localhost:5173>. Enter an `mtx_…` API key using the API-key control; it
+is kept in memory unless you explicitly choose session-only storage. The initial
+screen also offers **View demo data**, which is clearly labelled local fixture data
+rather than API data. For a production check, run `npm run typecheck`, `npm run lint`,
+`npm test`, and `npm run build` from `frontend/`.
+
+`CORS_ALLOWED_ORIGINS` is an optional, comma-separated FastAPI allow-list. It is empty
+by default (same-origin only); setting only `http://localhost:5173` permits the local
+Vite app's `GET /tickers`, `GET /jobs`, and `POST /chat` calls without enabling a
+wildcard origin.
 
 > The `curl` examples below print raw JSON. For the same data as a readable tree,
 > skip to [Reading it in a terminal](#reading-it-in-a-terminal).
@@ -40,15 +96,100 @@ against deterministic synthetic articles. Without an Anthropic key the price and
 movement-detection half still works — movements come back with
 `news_status: "failed"` and a warning explaining why, rather than a 500.
 
+### Authentication
+
+`/tickers`, `/chat`, `/jobs` and `/conversations` need an API key, sent as
+`Authorization: Bearer mtx_...`; `/health` is open, and `/admin` uses `X-Admin-Token`.
+A missing, unknown or revoked key, or one whose user is disabled, gets `401`. Keys are
+shown once, when created, and only their SHA-256 is stored.
+
+Get the first key with `scripts/create_api_key.py` (above), which writes straight to
+the database. After that, with `ADMIN_TOKEN` set, keys and users are managed over the
+API:
+
+```bash
+A="X-Admin-Token: $ADMIN_TOKEN"
+curl -X POST -H "$A" -H 'content-type: application/json' localhost:8000/admin/users \
+  -d '{"name": "Ada", "email": "ada@example.com", "plan": "free"}'      # -> {"id": 2, ...}
+curl -X POST -H "$A" -H 'content-type: application/json' localhost:8000/admin/users/2/keys \
+  -d '{"label": "laptop"}'                                                # -> {"key": "mtx_..."}
+curl -X DELETE -H "$A" localhost:8000/admin/keys/3                       # revoke a key
+curl -X PATCH -H "$A" -H 'content-type: application/json' localhost:8000/admin/users/2 \
+  -d '{"disabled": true}'                                                 # or {"plan": "pro"}
+```
+
+Conversations belong to the user who started them. `GET /conversations` lists yours
+and `GET /conversations/{id}` returns one with its messages and sources; anyone else's
+answers `404`. A job at `GET /jobs/{id}` is visible to the callers whose requests it
+serves.
+
+For local development, `AUTH_REQUIRED=false` serves callers without a key as an
+anonymous user, told apart by IP address. Behind a reverse proxy, set
+`TRUSTED_PROXY_COUNT` so the address comes from `X-Forwarded-For`; by default that
+header is ignored, because a client can write anything into it.
+
+### Quotas
+
+Each user has a plan (`free`, `pro`, `internal`; `anonymous` for callers without a
+key when `AUTH_REQUIRED=false`), and each plan a set of quotas:
+
+| quota | anonymous | free | pro | internal | counts |
+|---|---|---|---|---|---|
+| `requests_per_minute` | 30 | 60 | 300 | 1200 | every API call |
+| `chat_per_minute` | 2 | 5 | 20 | 60 | chat turns |
+| `chat_per_day` | 10 | 50 | 500 | 5000 | chat turns |
+| `cold_ingests_per_day` | 3 | 10 | 100 | 1000 | requests that start new ingestion or news work |
+| `refresh_per_day` | 0 | 5 | 50 | 500 | `refresh=true` requests that start work |
+| `allow_wait` | no | no | yes | yes | whether `wait=true` may run work inline |
+
+Override any of them with `PLAN_LIMITS_JSON`, e.g. `{"free": {"chat_per_day": 20}}`.
+Days are UTC. A request for a warm ticker, or one that joins work someone already
+queued, costs nothing from `cold_ingests_per_day`.
+
+Every response to an authenticated call carries the per-minute quota:
+`X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` (seconds until
+it is fully reset). Over a quota, the answer is `429` with `Retry-After` and those
+headers for the quota that refused, and a body naming it:
+
+```json
+{"error": "rate_limited", "detail": "Over the chat_per_day quota (50); retry in 31122 s."}
+```
+
+A chat turn that fails on our side (the model is down, or the daily spend cap is
+reached) gives its quota back. A stale ticker you are out of cold ingests for is
+served from storage with a warning rather than refused. `wait=true` on a plan without
+it is queued instead, with a warning; where it is allowed, at most
+`API_MAX_INLINE_INGESTIONS` run at once per API process, and past that the answer is
+`429`.
+
+`refresh=true` within `REFRESH_COOLDOWN_MINUTES` (60) of a ticker's last ingestion,
+by anyone, serves the stored data with a note saying when a refresh is next possible,
+and costs nothing.
+
+Only listed symbols are served. The worker downloads the US symbol directory weekly
+(Nasdaq Trader's `nasdaqlisted.txt` and `otherlisted.txt`, covering Nasdaq, NYSE and
+the other US venues), and a symbol not in it gets `404` before anything external is
+called and without counting as demand. Class shares can be asked for either way:
+`BRK.B` is served as `BRK-B`. Foreign listings (`RY.TO`) are not in a US directory;
+add them to `SYMBOL_ALLOWLIST`. Tickers already ingested and the seed list are always
+allowed. Until the first weekly refresh fills the directory, unknown symbols are
+served with a warning instead (`SYMBOL_DIRECTORY_MODE`).
+
+Quotas are counted in Redis (`REDIS_URL`), shared by every API process. If Redis is
+unreachable they keep working per process, and `/health` reports `"redis":
+"unreachable"`. Why this design, and what each failure looks like, is in
+[docs/FAIRNESS.md](docs/FAIRNESS.md).
+
 ### Running without Docker
 
 ```bash
 python3.13 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
-docker compose up -d db
+docker compose up -d db redis
 alembic upgrade head
 uvicorn app.main:app --reload
 python -m app.worker           # in a second terminal: runs queued ingestion
+python scripts/create_api_key.py --name "You" --plan pro   # then export METRIX_API_KEY
 ```
 
 Without the worker, `?wait=true` requests still work, but ingestion that is not
@@ -73,7 +214,7 @@ The first request for a ticker has nothing stored, so it triggers ingestion. Use
 `wait=true` to run it inline and get the finished data back in one call:
 
 ```bash
-curl "http://localhost:8000/tickers/NVDA?wait=true&limit=3"
+curl -H "Authorization: Bearer $METRIX_API_KEY" "http://localhost:8000/tickers/NVDA?wait=true&limit=3"
 ```
 
 Without `wait`, you get `202` immediately and ingestion is queued for the worker. The
@@ -81,9 +222,9 @@ response carries a `job_id`; asking again while it is queued joins the same job
 rather than starting another:
 
 ```bash
-curl "http://localhost:8000/tickers/NVDA"      # 202, status: "ingesting", job_id: 17
-curl "http://localhost:8000/jobs/17"           # status, attempts, progress, last_error
-curl "http://localhost:8000/tickers/NVDA"      # 200, status: "ready" once finished
+curl -H "Authorization: Bearer $METRIX_API_KEY" "http://localhost:8000/tickers/NVDA"      # 202, status: "ingesting", job_id: 17
+curl -H "Authorization: Bearer $METRIX_API_KEY" "http://localhost:8000/jobs/17"           # status, attempts, progress, last_error
+curl -H "Authorization: Bearer $METRIX_API_KEY" "http://localhost:8000/tickers/NVDA"      # 200, status: "ready" once finished
 ```
 
 A job that fails on something transient (a timeout, a 5xx, a rate limit) is retried
@@ -143,15 +284,15 @@ second flat list you have to join:
 
 ```bash
 # Big down days in 2026 that macro or political news helps explain
-curl "http://localhost:8000/tickers/NVDA?start=2026-01-01&direction=down&min_magnitude_pct=4&tier=hard"
+curl -H "Authorization: Bearer $METRIX_API_KEY" "http://localhost:8000/tickers/NVDA?start=2026-01-01&direction=down&min_magnitude_pct=4&tier=hard"
 
 # Second page of everything explained by company-specific or industry news
-curl "http://localhost:8000/tickers/NVDA?tier=easy&tier=medium&limit=10&offset=10"
+curl -H "Authorization: Bearer $METRIX_API_KEY" "http://localhost:8000/tickers/NVDA?tier=easy&tier=medium&limit=10&offset=10"
 ```
 
 ```bash
 # The price series, for charting
-curl "http://localhost:8000/tickers/NVDA?include_prices=true&limit=0" | jq '.prices[:3]'
+curl -H "Authorization: Bearer $METRIX_API_KEY" "http://localhost:8000/tickers/NVDA?include_prices=true&limit=0" | jq '.prices[:3]'
 ```
 
 ### Pre-warming
@@ -177,10 +318,30 @@ movements found, enrichments queued, used and deferred). Both admin endpoints an
 `503` until `ADMIN_TOKEN` is set. The design, and why it is built this way, is in
 [docs/PREWARMING.md](docs/PREWARMING.md).
 
+### Spend
+
+Every Exa search and LLM call is recorded in Postgres with its cost, and counted
+against `DAILY_SPEND_CAP_USD` (per UTC day; required when `APP_ENV=prod`). Background
+work, the nightly run included, may use at most `BACKGROUND_SPEND_SHARE` of the cap, so
+the rest stays available to users. Set `LLM_PRICES_JSON` from your provider's pricing
+page: it ships commented out, and until it is set LLM calls are priced at a
+deliberately pessimistic fallback and flagged as estimates.
+
+Once the cap is reached, chat answers `503` with `Retry-After` until midnight UTC,
+`GET /tickers` keeps serving stored data with a warning, and queued jobs wait for the
+reset instead of failing. See where the money went with:
+
+```bash
+curl -H "X-Admin-Token: $ADMIN_TOKEN" "http://localhost:8000/admin/usage?date=2026-10-09"
+```
+
+How the cap is enforced, and why it cannot be overshot by concurrent calls, is in
+[docs/FAIRNESS.md](docs/FAIRNESS.md).
+
 ### Chat
 
 ```bash
-curl -X POST http://localhost:8000/chat \
+curl -X POST http://localhost:8000/chat -H "Authorization: Bearer $METRIX_API_KEY" \
   -H 'content-type: application/json' \
   -d '{"ticker": "NVDA", "question": "What drove the biggest drop this year?"}'
 ```
@@ -201,7 +362,7 @@ curl -X POST http://localhost:8000/chat \
 Multi-turn — pass `conversation_id` back, and the ticker carries over:
 
 ```bash
-curl -X POST http://localhost:8000/chat -H 'content-type: application/json' \
+curl -X POST http://localhost:8000/chat -H "Authorization: Bearer $METRIX_API_KEY" -H 'content-type: application/json' \
   -d '{"conversation_id": "6f1c...", "question": "Was that company news or macro?"}'
 ```
 
@@ -273,6 +434,7 @@ ready · 22 movement(s), showing 3
 | `--json` | Print the raw API payload instead of the tree |
 | `--color auto\|always\|never` | Default `auto`: on for a terminal, off when piped |
 | `--base-url URL` | Default `$METRIX_URL`, else `http://localhost:8000` |
+| `--api-key KEY` | Default `$METRIX_API_KEY` |
 | `--timeout SECONDS` | HTTP timeout (default 900, generous for `--wait`) |
 
 Colour is on for a terminal and off when piped, and it is never the only signal —
@@ -432,6 +594,11 @@ app/
     prewarm.py    the nightly run: fan-out, price chunks, priorities, the budget
     schedule.py   when it runs: 17:15 New York, weekdays, DST-correct
     ratelimit.py  per-provider token buckets for Exa, Anthropic and yfinance
+    spend.py      the spend ledger and the daily cap: reserve, settle, refuse
+    auth.py       API keys (issue, check, revoke) and the caller's identity
+    limits.py     GCRA and daily counters, on Redis or in memory, with fall-back
+    quotas.py     per-plan quotas: charge, refund
+    symbol_directory.py  the US symbol directory: download, parse, refresh, check
     job_handlers.py  what each kind of queued job does
     chat.py       retrieval, prompt assembly, citation labels
     llm/          provider abstraction, Anthropic adapter, uniform error mapping
@@ -502,6 +669,8 @@ calls. What keeps it bounded:
 - **Peers are cached** for 30 days — one call per ticker, not per movement.
 - Exa calls retry with exponential backoff on 429/5xx only; a 4xx is not retried,
   because retrying a malformed request just burns quota.
+- **A daily spend cap** with a share reserved for users, enforced before every billable
+  call; see [Spend](#spend).
 
 ### Concurrency
 
@@ -556,6 +725,21 @@ No Docker, no network, no API keys.
   budget deferred.
 - `tests/test_schedule.py` — the 17:15 schedule across both DST changes and weekends.
 - `tests/test_ratelimit.py` — the token buckets on a fake clock, and backing off on 429.
+- `tests/test_spend.py` — prices and estimates, reserve and settle, the cap and the
+  background share, metering at both seams, how a refusal is held in the worker and
+  served in the API, attribution, and `/admin/usage`. `tests/test_postgres.py` races
+  forty reservations for one cap on real Postgres.
+- `tests/test_auth.py` — API keys and every 401, anonymous callers and the
+  `X-Forwarded-For` rule, who may see which job and conversation, the admin user and key
+  endpoints, and the bootstrap script.
+- `tests/test_limits.py` — the GCRA math on a fake clock, the limit-store contract
+  (in memory, and on real Redis when `TEST_REDIS_URL` is set), and the fall-back when
+  Redis is unreachable.
+- `tests/test_quotas.py` — 429s and their headers, chat's charge and refund, cold
+  ingests and refreshes, `wait=true` and its inline slots, and `/health` on Redis.
+- `tests/test_symbols.py` — the directory parser against samples cut from the real
+  files, `BRK.B` ↔ `BRK-B`, refreshes that never empty or gut the table, enforce, warn
+  and off, demand that one caller cannot inflate, and the refresh cooldown.
 - `tests/test_show_cli.py` — the renderer's citation parsing, colour gating, and
   sparkline edge cases.
 
@@ -568,10 +752,14 @@ real Postgres when `TEST_DATABASE_URL` is set, along with `tests/test_postgres.p
 (concurrent claimers through `SKIP LOCKED`, concurrent budget spending, `NOTIFY`).
 The database named there is wiped, and must have `test` in its name:
 
+The limiter's contract tests run against real Redis the same way, when
+`TEST_REDIS_URL` is set; the Redis database named there is flushed, so use a spare one:
+
 ```bash
-docker compose up -d db
+docker compose up -d db redis
 docker compose exec db createdb -U metrix metrix_test
-TEST_DATABASE_URL=postgresql+asyncpg://metrix:metrix@localhost:5433/metrix_test pytest
+TEST_DATABASE_URL=postgresql+asyncpg://metrix:metrix@localhost:5433/metrix_test \
+TEST_REDIS_URL=redis://localhost:6380/15 pytest
 ```
 
 ---
@@ -584,10 +772,9 @@ TEST_DATABASE_URL=postgresql+asyncpg://metrix:metrix@localhost:5433/metrix_test 
   is exactly the distinction the Hard tier is trying to make downstream.
 - **Article bodies are whatever Exa returns** — usually a summary or the first ~2k
   characters, sometimes paywalled boilerplate. Scoring quality is bounded by that.
-- **Rate limits are per process.** Each worker process has its own token buckets, so
-  with N workers each should be configured for 1/N of a provider's limit. A shared
-  bucket in Postgres or Redis is the upgrade path; see
-  [docs/PREWARMING.md](docs/PREWARMING.md).
+- **Rate limits are only as shared as Redis is up.** While Redis is unreachable each
+  process limits itself to rate / `EXPECTED_PROCESSES`, which is right only if that
+  setting matches the number of processes; see [docs/FAIRNESS.md](docs/FAIRNESS.md).
 - **Tickers outside the pre-warm universe are still cold** on their first request.
 - **Relevance is unevaluated.** There is no labelled set, so "the scoring is good" is
   an assertion, not a measurement. See `SUBMISSION.md`.

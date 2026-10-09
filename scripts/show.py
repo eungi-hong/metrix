@@ -14,6 +14,9 @@ wrong.
     scripts/show.py DHI --tier hard --direction up
     scripts/show.py DHI --ask "what drove the biggest drop?"
 
+The API wants a key: set METRIX_API_KEY (or pass --api-key). Get one with
+`scripts/create_api_key.py`.
+
 On colour
 ---------
 Only the 16 basic ANSI colours are used, never 256-colour or truecolour. Those
@@ -42,6 +45,7 @@ from typing import Any
 import httpx
 
 DEFAULT_BASE_URL = os.environ.get("METRIX_URL", "http://localhost:8000")
+DEFAULT_API_KEY = os.environ.get("METRIX_API_KEY")
 
 
 # --------------------------------------------------------------------- colour
@@ -386,7 +390,10 @@ def fetch_ticker(args: argparse.Namespace) -> dict[str, Any]:
         params["tier"] = args.tier
 
     response = httpx.get(
-        f"{args.base_url}/tickers/{args.ticker}", params=params, timeout=args.timeout
+        f"{args.base_url}/tickers/{args.ticker}",
+        params=params,
+        headers=auth_headers(args),
+        timeout=args.timeout,
     )
     return unwrap(response)
 
@@ -395,8 +402,14 @@ def ask(args: argparse.Namespace) -> dict[str, Any]:
     body: dict[str, Any] = {"ticker": args.ticker, "question": args.ask}
     if args.conversation:
         body["conversation_id"] = args.conversation
-    response = httpx.post(f"{args.base_url}/chat", json=body, timeout=args.timeout)
+    response = httpx.post(
+        f"{args.base_url}/chat", json=body, headers=auth_headers(args), timeout=args.timeout
+    )
     return unwrap(response)
+
+
+def auth_headers(args: argparse.Namespace) -> dict[str, str]:
+    return {"Authorization": f"Bearer {args.api_key}"} if args.api_key else {}
 
 
 def unwrap(response: httpx.Response) -> dict[str, Any]:
@@ -451,6 +464,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-sparkline", action="store_true", help="Skip fetching prices.")
 
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    parser.add_argument(
+        "--api-key", default=DEFAULT_API_KEY, help="Defaults to $METRIX_API_KEY."
+    )
     parser.add_argument("--timeout", type=float, default=900.0)
     parser.add_argument("--color", choices=["auto", "always", "never"], default="auto")
     parser.add_argument("--json", action="store_true", help="Print raw JSON instead.")

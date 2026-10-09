@@ -10,6 +10,11 @@ Exa returns results in relevance order but exposes no numeric score, so
 ordering is all the signal it gives. Deciding whether a result genuinely
 explains a given movement is left to the LLM scoring pass in
 `app.services.relevance`.
+
+Every search is metered here (`app.services.spend`): reserved against the
+daily cap before the first attempt, and recorded at Exa's own `costDollars`
+once it succeeds. A cache hit never reaches this class, so it costs and
+records nothing.
 """
 
 from __future__ import annotations
@@ -28,7 +33,7 @@ from tenacity import (
 from app.core.config import settings
 from app.core.errors import ConfigurationError, NewsProviderError
 from app.core.logging import get_logger
-from app.services import ratelimit
+from app.services import ratelimit, spend
 from app.services.news.base import (
     NewsCandidate,
     NewsProvider,
@@ -97,12 +102,18 @@ class ExaNewsProvider(NewsProvider):
 
     async def execute(self, request: NewsSearchRequest) -> dict[str, Any]:
         client = self._require_client()
-        try:
-            return await self._post(client, self._body(request))
-        except NewsProviderError:
-            raise
-        except Exception as exc:
-            raise NewsProviderError("exa", f"search failed: {exc}") from exc
+        # Reserved outside the try, so a refusal reaches the caller as
+        # SpendCapReached rather than as a failed search.
+        async with spend.metered(self.name, "search", spend.exa_estimate()) as meter:
+            try:
+                payload = await self._post(client, self._body(request))
+            except NewsProviderError:
+                raise
+            except Exception as exc:
+                raise NewsProviderError("exa", f"search failed: {exc}") from exc
+            cost, estimated = spend.exa_cost(payload)
+            await meter.settle(cost_usd=cost, estimated=estimated)
+        return payload
 
     @retry(
         retry=retry_if_exception_type(_RetryableUpstream),

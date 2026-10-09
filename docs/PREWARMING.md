@@ -446,10 +446,10 @@ The provider's own short retries cover a blip; past that, the movement fails, it
 fails, and the queue retries it with backoff instead of burning retries in a tight
 loop.
 
-The buckets are per process. With N worker processes, configure each with the
-provider's limit divided by N. The upgrade path is a shared bucket, either a row per
-provider in Postgres updated with the queue's conditional-UPDATE pattern or a Redis
-token bucket. Neither is built, because at one or two workers the arithmetic is easy.
+These buckets were per process when this was written, so N worker processes each had
+to be configured with 1/N of the limit. Phase 2 replaced them with limits shared
+through Redis by every process, with a share reserved for interactive calls; see
+"Provider rate limits" in [FAIRNESS.md](FAIRNESS.md).
 
 ### The budget
 
@@ -483,7 +483,8 @@ enough to read in one sitting, which matters for a project whose design has to b
 explained.
 
 Per-process instead of shared rate limits. Correct with one worker and easy to
-configure with a few. Past that, a shared bucket is the next step.
+configure with a few. Past that, a shared bucket is the next step, and Phase 2 took
+it (see FAIRNESS.md).
 
 No holiday calendar. A holiday run costs a few cheap price calls and finds nothing,
 and a calendar is a dependency with a list to maintain.

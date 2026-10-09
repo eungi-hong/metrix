@@ -1,0 +1,126 @@
+# The checks in front of production. Railway ("Wait for CI") and Vercel
+# (Deployment Checks) both hold a deploy of main until every job here passes,
+# so a red build never ships. Job names are what Vercel's Deployment Checks
+# refer to: rename one and update the project settings with it.
+name: CI
+
+on:
+  pull_request:
+  # Railway's "Wait for CI" only works with a workflow that runs on push.
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # A newer push to a PR supersedes the old run. Runs on main are never
+  # cancelled: each one is the gate for that commit's deploy.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  backend:
+    name: backend
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: metrix
+          POSTGRES_PASSWORD: metrix
+          POSTGRES_DB: metrix_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U metrix -d metrix_test"
+          --health-interval 3s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 3s --health-timeout 3s --health-retries 20
+    env:
+      # Turns on the tests marked postgres and redis, which skip otherwise.
+      TEST_DATABASE_URL: postgresql+asyncpg://metrix:metrix@localhost:5432/metrix_test
+      TEST_REDIS_URL: redis://localhost:6379/15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: ruff check .
+      - run: pytest
+
+  migrations:
+    name: migrations
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: metrix
+          POSTGRES_PASSWORD: metrix
+          POSTGRES_DB: metrix
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U metrix -d metrix"
+          --health-interval 3s --health-timeout 3s --health-retries 20
+    env:
+      DATABASE_URL: postgresql+asyncpg://metrix:metrix@localhost:5432/metrix
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install -r requirements.txt
+      - name: One migration head
+        # Two heads means parallel branches each added a migration. Production
+        # would apply neither; merge them (alembic merge) before shipping.
+        run: |
+          alembic heads
+          test "$(alembic heads | wc -l)" -eq 1
+      - name: Upgrade an empty database to head
+        run: alembic upgrade head
+      - name: Models and migrations agree
+        # Fails when a model changed without a migration to match.
+        run: alembic check
+      - name: The worker's pre-deploy wait sees the schema as ready
+        run: python scripts/wait_for_migrations.py --timeout 10
+
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+        env:
+          # Any value: the build refuses to run without one (vite.config.ts).
+          VITE_METRIX_API_BASE_URL: https://api.example.invalid
+
+  docker:
+    name: docker
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # The image Railway builds, so a broken Dockerfile fails here first.
+      - run: docker build -t metrix:ci .
+      - name: The API and the worker import
+        run: docker run --rm --entrypoint python metrix:ci -c "import app.main, app.worker"

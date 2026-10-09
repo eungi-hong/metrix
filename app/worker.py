@@ -19,11 +19,20 @@ The nightly schedule
 --------------------
 Each worker also runs a small scheduler. Whenever it wakes, it enqueues the
 most recent scheduled run (`schedule.latest_run_at`) unless that trading date
-already has one, then sleeps until the next. Waking for the most recent run,
+already has one, then sleeps until the next; and it enqueues the week's
+symbol-directory refresh if this ISO week has none. Waking for the most recent run,
 rather than only at the exact instant, means a worker that was down at 17:15
 catches up when it starts. Every replica may do this: the job is deduplicated
 on `nightly:{date}`, and the run itself is unique per trading date, so a date
 is never run twice.
+
+Spending
+--------
+Each job runs with its attribution set (`app.core.context`): its id, the
+user whose request created it, and the call class the spend cap draws on, `interactive` for priority 0 and
+`background` otherwise. A job the cap refuses is held until the cap resets
+(`queue.hold`), not failed: it keeps its attempts and its movement stays as it
+was.
 
 Shutdown
 --------
@@ -48,10 +57,12 @@ from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
+from app.core.context import CallClass, attributed
+from app.core.errors import SpendCapReached
 from app.core.logging import configure_logging, get_logger
 from app.db.session import SessionLocal, dispose_engine
 from app.models.jobs import Job, JobKind, JobSource
-from app.services import prewarm, queue, schedule
+from app.services import prewarm, queue, schedule, spend
 from app.services.job_handlers import HANDLERS, Handler, JobContext
 from app.services.llm import LLMProvider, get_llm_client
 
@@ -59,6 +70,17 @@ logger = get_logger(__name__)
 
 # Longest single sleep of the scheduler loop.
 SCHEDULER_MAX_SLEEP_SECONDS = 300.0
+
+
+def call_class_for(job: Job) -> CallClass:
+    """Priority 0 means a user is waiting on the job; everything else is background.
+
+    Read at run time, so a nightly job that a user's request pulled forward to
+    priority 0 spends as interactive, as it does for the nightly budget.
+    """
+    if job.priority <= queue.PRIORITY_INTERACTIVE:
+        return CallClass.INTERACTIVE
+    return CallClass.BACKGROUND
 
 
 class Worker:
@@ -102,7 +124,7 @@ class Worker:
             for i in range(self._concurrency)
         ]
         background = [asyncio.create_task(self._reap_loop())]
-        if settings.prewarm_schedule_enabled and JobKind.SCHEDULE_NIGHTLY in self._handlers:
+        if self._schedules_nightly or self._schedules_directory:
             background.append(asyncio.create_task(self._schedule_loop()))
 
         await self._stopping.wait()
@@ -163,7 +185,14 @@ class Worker:
         try:
             async with self._session_factory() as session:
                 try:
-                    await self._handlers[job.kind](session, job, context)
+                    with attributed(
+                        call_class=call_class_for(job), job_id=job.id, user_id=job.user_id
+                    ):
+                        await self._handlers[job.kind](session, job, context)
+                except SpendCapReached as exc:
+                    await session.rollback()
+                    await self._hold_for_spend_cap(session, job, exc)
+                    return
                 except Exception as exc:
                     await session.rollback()
                     error: Exception | None = exc
@@ -176,6 +205,24 @@ class Worker:
             keepalive.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await keepalive
+
+    async def _hold_for_spend_cap(
+        self, session: AsyncSession, job: Job, refusal: SpendCapReached
+    ) -> None:
+        """Hold the job until the cap resets, spread out after midnight.
+
+        A nightly enrichment held this way counts as deferred on its run, like
+        one the run's own budget turned away.
+        """
+        until = queue.jittered_after(refusal.retry_at, settings.spend_resume_jitter_seconds)
+        if not await queue.hold(
+            session, job, until=until, reason=queue.HOLD_SPEND_CAP, detail=str(refusal)
+        ):
+            return
+        run_id = job.payload.get("run_id")
+        if job.kind == JobKind.ENRICH_MOVEMENT and run_id is not None:
+            await queue.add_to_run(session, int(run_id), enrichments_deferred=1)
+            await session.commit()
 
     async def _keepalive(self, job: Job, context: JobContext) -> None:
         """Refresh the job's lock every heartbeat, and publish progress when
@@ -233,11 +280,50 @@ class Worker:
             await session.commit()
             return job
 
+    @property
+    def _schedules_nightly(self) -> bool:
+        return settings.prewarm_schedule_enabled and JobKind.SCHEDULE_NIGHTLY in self._handlers
+
+    @property
+    def _schedules_directory(self) -> bool:
+        return (
+            settings.symbol_directory_mode != "off"
+            and JobKind.REFRESH_SYMBOL_DIRECTORY in self._handlers
+        )
+
+    async def directory_tick(self, now: datetime | None = None) -> Job | None:
+        """Enqueue this ISO week's symbol-directory refresh, unless one exists.
+
+        Any job for the week counts, finished or dead: a refresh that failed
+        every attempt waits for next week rather than retrying every tick, and
+        the directory it failed to replace stays in use meanwhile.
+        """
+        now = now or datetime.now(timezone.utc)
+        key = queue.symbols_key(now.date())
+        async with self._session_factory() as session:
+            if await queue.key_used(session, key):
+                return None
+            job = await queue.enqueue(
+                session,
+                JobKind.REFRESH_SYMBOL_DIRECTORY,
+                {},
+                priority=queue.PRIORITY_NIGHTLY_FANOUT,
+                dedupe_key=key,
+                source=JobSource.SCHEDULED,
+                run_after=queue.jittered(now, not_before=now),
+                now=now,
+            )
+            await session.commit()
+            return job
+
     async def _schedule_loop(self) -> None:
         while not self._stopping.is_set():
             now = datetime.now(timezone.utc)
             try:
-                await self.schedule_tick(now)
+                if self._schedules_nightly:
+                    await self.schedule_tick(now)
+                if self._schedules_directory:
+                    await self.directory_tick(now)
             except Exception as exc:
                 logger.error("schedule_tick_failed", error=str(exc))
             until_next = (schedule.next_run_after(now) - now).total_seconds()
@@ -274,6 +360,7 @@ async def _main() -> None:
 
 def main() -> None:
     configure_logging()
+    spend.warn_on_startup()
     asyncio.run(_main())
 
 

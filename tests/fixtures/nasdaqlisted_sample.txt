@@ -1,0 +1,10 @@
+Symbol|Security Name|Market Category|Test Issue|Financial Status|Round Lot Size|ETF|NextShares
+AAAP|Pacer Barings CLO Market Flex ETF|G|N|N|100|Y|N
+AAPL|Apple Inc. - Common Stock|Q|N|N|40|N|N
+GOOG|Alphabet Inc. - Class C Capital Stock|Q|N|N|40|N|N
+GOOGL|Alphabet Inc. - Class A Common Stock|Q|N|N|40|N|N
+MSFT|Microsoft Corporation - Common Stock|Q|N|N|40|N|N
+NVDA|NVIDIA Corporation - Common Stock|Q|N|N|100|N|N
+QQQ|Invesco QQQ Trust, Series 1|G|N|N|40|Y|N
+ZXYZ.A|Nasdaq Symbology Test Common Stock|Q|Y|N|100|N|N
+File Creation Time: 1009202610:01|||||||

@@ -27,6 +27,7 @@ class JobKind(StrEnum):
     PREWARM_SECTOR_MACRO = "prewarm_sector_macro"
     ENRICH_MOVEMENT = "enrich_movement"
     SCHEDULE_NIGHTLY = "schedule_nightly"
+    REFRESH_SYMBOL_DIRECTORY = "refresh_symbol_directory"
 
 
 class JobStatus(StrEnum):
@@ -106,12 +107,19 @@ class Job(Base):
     # Set at claim and refreshed by the worker's heartbeat while it runs.
     locked_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(sa.Text)
+    # Why a queued job is being held rather than retried: "spend_cap" while it
+    # waits for tomorrow's budget. Cleared when the job is claimed.
+    hold_reason: Mapped[str | None] = mapped_column(sa.String(32))
 
     source: Mapped[JobSource] = mapped_column(sa_enum(JobSource, "job_source"), nullable=False)
     progress: Mapped[dict[str, Any] | None] = mapped_column(JSONType)
     run_id: Mapped[int | None] = mapped_column(
         sa.ForeignKey("prewarm_runs.id", ondelete="SET NULL")
     )
+    # The user whose request created the job, for interactive jobs. The worker
+    # attributes the job's spend to them. Who may *see* the job is wider:
+    # everyone whose request it served (`JobRequester`).
+    user_id: Mapped[int | None] = mapped_column(sa.ForeignKey("users.id"))
 
     created_at: Mapped[datetime] = mapped_column(
         sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
@@ -124,6 +132,27 @@ class Job(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
         return f"<Job {self.id} {self.kind} {self.dedupe_key} {self.status}>"
+
+
+class JobRequester(Base):
+    """A caller whose request a job serves, and who may therefore see it.
+
+    One row per (job, caller), not a column on the job: deduplication folds
+    a second user's request into the first user's job, and both were handed
+    its id. `requester` is the principal's key, "user:<id>" or "anon:<ip>".
+    Jobs no request created, such as the nightly run's, have no rows and are
+    visible to admins only.
+    """
+
+    __tablename__ = "job_requesters"
+
+    job_id: Mapped[int] = mapped_column(
+        sa.ForeignKey("jobs.id", ondelete="CASCADE"), primary_key=True
+    )
+    requester: Mapped[str] = mapped_column(sa.String(80), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+    )
 
 
 class PrewarmRun(Base):

@@ -6,16 +6,62 @@ about movement detection or cost control is a hardcoded magic number.
 
 from __future__ import annotations
 
+import json
+import re
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
-
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Calendar days convert to trading days at roughly 5 in 7 (ignoring holidays).
 TRADING_DAYS_PER_WEEK = 5
+
+
+class LLMPrice(BaseModel):
+    """One model's prices, in US dollars per million tokens."""
+
+    input_per_mtok: float = Field(ge=0)
+    output_per_mtok: float = Field(ge=0)
+    cache_read_per_mtok: float = Field(ge=0)
+    cache_write_per_mtok: float = Field(ge=0)
+
+
+class PlanLimits(BaseModel):
+    """What one plan may do. Every count is per principal: a user, or an
+    anonymous caller's IP address."""
+
+    requests_per_minute: int = Field(ge=0, description="Every authenticated API call.")
+    chat_per_minute: int = Field(ge=0)
+    chat_per_day: int = Field(ge=0)
+    cold_ingests_per_day: int = Field(
+        ge=0, description="Requests that start new ingestion or news work; a warm ticker never counts."
+    )
+    refresh_per_day: int = Field(ge=0, description="refresh=true requests that cause work.")
+    allow_wait: bool = Field(description="Whether wait=true may run work inline in the API.")
+
+
+# Starting points, meant to be tuned. Anonymous callers (AUTH_REQUIRED=false)
+# get the least, and cannot force refreshes or run work inline.
+DEFAULT_PLAN_LIMITS: dict[str, PlanLimits] = {
+    "anonymous": PlanLimits(
+        requests_per_minute=30, chat_per_minute=2, chat_per_day=10,
+        cold_ingests_per_day=3, refresh_per_day=0, allow_wait=False,
+    ),
+    "free": PlanLimits(
+        requests_per_minute=60, chat_per_minute=5, chat_per_day=50,
+        cold_ingests_per_day=10, refresh_per_day=5, allow_wait=False,
+    ),
+    "pro": PlanLimits(
+        requests_per_minute=300, chat_per_minute=20, chat_per_day=500,
+        cold_ingests_per_day=100, refresh_per_day=50, allow_wait=True,
+    ),
+    "internal": PlanLimits(
+        requests_per_minute=1200, chat_per_minute=60, chat_per_day=5000,
+        cold_ingests_per_day=1000, refresh_per_day=500, allow_wait=True,
+    ),
+}
 
 
 class Settings(BaseSettings):
@@ -204,6 +250,133 @@ class Settings(BaseSettings):
         description="Movement enrichments (news searches + one LLM call each) a "
         "nightly run may spend. The rest wait for demand or the next night.",
     )
+    # ------------------------------------------------------------ identity
+    auth_required: bool = Field(
+        default=True,
+        description="Require an API key (Authorization: Bearer mtx_...) on /tickers, "
+        "/chat, /jobs and /conversations. When false, callers without one are "
+        "served as an anonymous principal, keyed by client IP, on the "
+        "restrictive anonymous plan. A key that is sent is always checked.",
+    )
+    trusted_proxy_count: int = Field(
+        default=0,
+        ge=0,
+        description="How many reverse proxies in front of the API append to "
+        "X-Forwarded-For. 0 (the default) ignores the header and uses the socket "
+        "peer, since a client can write anything into it.",
+    )
+    api_key_touch_interval_minutes: float = Field(
+        default=5.0,
+        ge=0,
+        description="A key's last_used_at is refreshed at most this often, so "
+        "authenticating is not a write on every request.",
+    )
+    cors_allowed_origins: str = Field(
+        default="",
+        description="Comma-separated browser origins allowed to call the API. "
+        "Leave empty to emit no CORS headers; set http://localhost:5173 for the local frontend.",
+    )
+    cors_allowed_origin_regex: str = Field(
+        default="",
+        description="Also allow origins matching this regular expression (matched "
+        "in full), for preview deployments whose URL changes on every push. Keep it "
+        "specific to this project, e.g. ^https://metrix-[a-z0-9-]+-eungi-hong\\.vercel\\.app$, "
+        "never .*\\.vercel\\.app, which would let anyone's Vercel app call the API.",
+    )
+    plan_limits_json: Annotated[dict[str, PlanLimits], NoDecode] = Field(
+        default_factory=lambda: dict(DEFAULT_PLAN_LIMITS),
+        description="JSON map of plan -> limits, overriding the defaults field by "
+        "field, e.g. {\"free\": {\"chat_per_day\": 20}}. Plans: anonymous, free, "
+        "pro, internal.",
+    )
+    demand_anonymous_weight: float = Field(
+        default=0.25,
+        ge=0,
+        description="What one anonymous caller's daily request for a symbol adds "
+        "to its popularity; a user's adds 1. Anonymous callers are cheap to multiply.",
+    )
+    demand_internal_weight: float = Field(
+        default=0.0,
+        ge=0,
+        description="The same for the internal plan. 0: our own traffic is not demand.",
+    )
+    refresh_cooldown_minutes: float = Field(
+        default=60.0,
+        ge=0,
+        description="refresh=true within this long of a ticker's last ingestion, by "
+        "anyone, returns stored data instead of ingesting again.",
+    )
+
+    # --------------------------------------------------- symbol directory
+    symbol_directory_mode: Literal["enforce", "warn", "off"] = Field(
+        default="enforce",
+        description="enforce: an unknown symbol is 404 before any external call. "
+        "warn: it is served, and logged. off: no check. enforce acts as warn "
+        "while the directory is still empty, so a fresh deploy works.",
+    )
+    symbol_directory_urls: str = Field(
+        default=(
+            "https://www.nasdaqtrader.com/dynamic/SymDir/nasdaqlisted.txt,"
+            "https://www.nasdaqtrader.com/dynamic/SymDir/otherlisted.txt"
+        ),
+        description="Comma-separated Nasdaq Trader symbol directory files: "
+        "nasdaqlisted.txt (Nasdaq) and otherlisted.txt (NYSE, NYSE American, "
+        "NYSE Arca, Cboe, IEX and others). US listings only.",
+    )
+    symbol_allowlist: str = Field(
+        default="",
+        description="Comma-separated symbols allowed though not in the directory, "
+        "e.g. foreign listings in Yahoo's form: RY.TO,VOD.L,7203.T.",
+    )
+    symbol_directory_min_rows: int = Field(
+        default=5000,
+        ge=0,
+        description="A refresh with fewer rows than this is assumed broken and "
+        "discarded; the previous directory stays.",
+    )
+    symbol_directory_max_shrink: float = Field(
+        default=0.2,
+        ge=0,
+        le=1,
+        description="A refresh that would remove more than this fraction of the "
+        "current directory is assumed broken and discarded.",
+    )
+    symbol_directory_timeout_seconds: float = Field(
+        default=30.0, gt=0, description="Per-file download timeout."
+    )
+
+    api_max_inline_ingestions: int = Field(
+        default=2,
+        ge=0,
+        description="wait=true requests running work inline at once, per API "
+        "process. Past this they get 429, so inline work can never take over "
+        "the API's capacity.",
+    )
+
+    # -------------------------------------------------------------- redis
+    redis_url: str | None = Field(
+        default=None,
+        description="Redis for per-user limits (and, later, shared provider rate "
+        "limits). Unset: per-process in-memory limits, with a warning.",
+    )
+    redis_timeout_seconds: float = Field(
+        default=0.25,
+        gt=0,
+        description="Connect and command timeout. Short: a limit check is on every "
+        "request, and a slow Redis must fall back rather than slow the API.",
+    )
+    redis_retry_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        description="After Redis fails, use the in-memory fallback for this long "
+        "before trying Redis again, so an outage costs one timeout, not one per request.",
+    )
+    limiter_fallback_log_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        description="limiter_fallback is logged at most this often while Redis is down.",
+    )
+
     admin_token: str | None = Field(
         default=None,
         description="Required in the X-Admin-Token header by /admin endpoints, "
@@ -211,15 +384,105 @@ class Settings(BaseSettings):
     )
 
     # -------------------------------------------------------- rate limits
-    # Per process. With N worker processes, set each to (provider limit) / N.
+    # Account-wide: shared through Redis by the API and every worker.
     exa_max_rps: float = Field(
-        default=5.0, gt=0, description="Exa requests per second, per process."
+        default=5.0,
+        gt=0,
+        description="Exa requests per second, across every process: the account's limit.",
     )
     anthropic_max_rpm: float = Field(
-        default=50.0, gt=0, description="Anthropic requests per minute, per process."
+        default=50.0,
+        gt=0,
+        description="Anthropic requests per minute, across every process: the account's limit.",
     )
     yfinance_max_rps: float = Field(
-        default=2.0, gt=0, description="yfinance requests per second, per process."
+        default=2.0,
+        gt=0,
+        description="Yahoo requests per second, across every process (Yahoo limits by "
+        "IP, which the processes share).",
+    )
+    background_rate_share: float = Field(
+        default=0.6,
+        ge=0,
+        le=1,
+        description="Fraction of each provider's rate background work may use. "
+        "Interactive calls may use all of it, so chat always has headroom.",
+    )
+    rate_limit_max_wait_seconds: float = Field(
+        default=60.0,
+        ge=0,
+        description="Longest a background call waits for its provider's rate limit. "
+        "Past that it fails as retryable, and the queue backs the job off.",
+    )
+    rate_limit_interactive_max_wait_seconds: float = Field(
+        default=5.0,
+        ge=0,
+        description="Longest a call a user is waiting on waits; past that, 503 "
+        "with Retry-After.",
+    )
+    expected_processes: int = Field(
+        default=2,
+        ge=1,
+        description="Processes calling providers (API plus workers). While Redis is "
+        "unreachable each limits itself to rate / this, so together they stay "
+        "near the account's limit.",
+    )
+
+    # -------------------------------------------------------------- spend
+    # Prices are configuration, never code: they change, and a guessed price
+    # in a cap is worse than none. See .env.example for the shape.
+    llm_prices_json: Annotated[dict[str, LLMPrice], NoDecode] = Field(
+        default_factory=dict,
+        description="JSON map of model id -> {input_per_mtok, output_per_mtok, "
+        "cache_read_per_mtok, cache_write_per_mtok}, in USD per million tokens. "
+        "Calls to a model missing here are recorded at the fallback rate below "
+        "and flagged cost_estimated.",
+    )
+    llm_fallback_input_per_mtok: float = Field(
+        default=20.0,
+        ge=0,
+        description="Rate for input (and cache) tokens of a model with no entry in "
+        "LLM_PRICES_JSON. Not a price: a deliberately pessimistic stand-in, so an "
+        "unpriced model overcounts against the cap rather than slipping under it.",
+    )
+    llm_fallback_output_per_mtok: float = Field(
+        default=100.0,
+        ge=0,
+        description="Rate for output tokens of an unpriced model. Pessimistic, as above.",
+    )
+    exa_cost_estimate_usd: float = Field(
+        default=0.05,
+        ge=0,
+        description="Cost assumed for one Exa search: reserved against the cap "
+        "before each search, and recorded (flagged estimated) when Exa's "
+        "response carries no costDollars. Deliberately high; set it from your "
+        "Exa usage page.",
+    )
+    daily_spend_cap_usd: float | None = Field(
+        default=None,
+        gt=0,
+        description="Most the service may spend on Exa and the LLM per UTC day. "
+        "Required when APP_ENV=prod; unset means unlimited (with a warning).",
+    )
+    background_spend_share: float = Field(
+        default=0.6,
+        ge=0,
+        le=1,
+        description="Fraction of the daily cap background work (the nightly run, "
+        "follow-ups) may use. The rest is reserved for users.",
+    )
+    spend_alert_fraction: float = Field(
+        default=0.8,
+        gt=0,
+        le=1,
+        description="Log spend_threshold_crossed, once a day, when settled spend "
+        "reaches this fraction of the cap.",
+    )
+    spend_resume_jitter_seconds: float = Field(
+        default=300.0,
+        ge=0,
+        description="Jobs held by the cap resume within this many seconds after "
+        "00:00 UTC, so they do not all start in the same second.",
     )
 
     # ---------------------------------------------------------- job queue
@@ -318,6 +581,80 @@ class Settings(BaseSettings):
             )
         return self
 
+    @field_validator("llm_prices_json", mode="before")
+    @classmethod
+    def _parse_prices(cls, v: Any) -> Any:
+        if not isinstance(v, str):
+            return v
+        if not v.strip():
+            return {}
+        try:
+            raw = json.loads(v)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"LLM_PRICES_JSON is not valid JSON: {exc}") from exc
+        if not isinstance(raw, dict):
+            raise ValueError("LLM_PRICES_JSON must be a JSON object keyed by model id")
+        prices = {}
+        for model, entry in raw.items():
+            try:
+                prices[model] = LLMPrice.model_validate(entry)
+            except ValidationError as exc:
+                fields = ", ".join(str(e["loc"][0]) for e in exc.errors() if e["loc"])
+                raise ValueError(
+                    f"LLM_PRICES_JSON entry for '{model}' needs non-negative "
+                    f"input_per_mtok, output_per_mtok, cache_read_per_mtok and "
+                    f"cache_write_per_mtok (problem with: {fields or 'the entry'})"
+                ) from exc
+        return prices
+
+    @field_validator("plan_limits_json", mode="before")
+    @classmethod
+    def _parse_plan_limits(cls, v: Any) -> Any:
+        if not isinstance(v, str):
+            return v
+        if not v.strip():
+            return dict(DEFAULT_PLAN_LIMITS)
+        try:
+            raw = json.loads(v)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"PLAN_LIMITS_JSON is not valid JSON: {exc}") from exc
+        if not isinstance(raw, dict):
+            raise ValueError("PLAN_LIMITS_JSON must be a JSON object keyed by plan")
+        unknown = sorted(set(raw) - set(DEFAULT_PLAN_LIMITS))
+        if unknown:
+            raise ValueError(
+                f"PLAN_LIMITS_JSON has unknown plan(s) {unknown}; "
+                f"plans are {sorted(DEFAULT_PLAN_LIMITS)}"
+            )
+        limits = dict(DEFAULT_PLAN_LIMITS)
+        for plan, overrides in raw.items():
+            if not isinstance(overrides, dict):
+                raise ValueError(f"PLAN_LIMITS_JSON entry for '{plan}' must be an object")
+            try:
+                limits[plan] = PlanLimits.model_validate(
+                    DEFAULT_PLAN_LIMITS[plan].model_dump() | overrides
+                )
+            except ValidationError as exc:
+                problems = "; ".join(
+                    f"{e['loc'][0]}: {e['msg']}" for e in exc.errors() if e["loc"]
+                )
+                raise ValueError(f"PLAN_LIMITS_JSON entry for '{plan}': {problems}") from exc
+        return limits
+
+    @field_validator("daily_spend_cap_usd", mode="before")
+    @classmethod
+    def _blank_cap_is_unset(cls, v: Any) -> Any:
+        return None if isinstance(v, str) and not v.strip() else v
+
+    @model_validator(mode="after")
+    def _require_cap_in_prod(self) -> "Settings":
+        if self.app_env == "prod" and self.daily_spend_cap_usd is None:
+            raise ValueError(
+                "DAILY_SPEND_CAP_USD is required when APP_ENV=prod: without it "
+                "nothing bounds what the service can spend in a day."
+            )
+        return self
+
     @field_validator("prewarm_timezone")
     @classmethod
     def _require_known_timezone(cls, v: str) -> str:
@@ -327,13 +664,25 @@ class Settings(BaseSettings):
             raise ValueError(f"PREWARM_TIMEZONE '{v}' is not a known IANA time zone") from exc
         return v
 
+    @field_validator("cors_allowed_origin_regex")
+    @classmethod
+    def _require_valid_origin_regex(cls, v: str) -> str:
+        # Fail at startup, not on the first cross-origin request.
+        try:
+            re.compile(v)
+        except re.error as exc:
+            raise ValueError(f"CORS_ALLOWED_ORIGIN_REGEX is not a valid regex: {exc}") from exc
+        return v
+
     @field_validator("database_url")
     @classmethod
     def _require_async_driver(cls, v: str) -> str:
-        if v.startswith("postgresql://"):
-            # Accept the canonical libpq URL and upgrade it, rather than failing
-            # on the most common copy-paste mistake.
-            return v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        # Accept the canonical libpq URL and upgrade it, rather than failing
+        # on the most common copy-paste mistake. Some hosts hand out the older
+        # `postgres://` scheme, which SQLAlchemy does not recognise at all.
+        for scheme in ("postgresql://", "postgres://"):
+            if v.startswith(scheme):
+                return "postgresql+asyncpg://" + v[len(scheme):]
         return v
 
 

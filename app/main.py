@@ -5,12 +5,16 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.errors import register_exception_handlers
-from app.api.routes import admin, chat, health, jobs, tickers
+from app.api.middleware import InteractiveAttributionMiddleware
+from app.api.routes import admin, chat, conversations, health, jobs, tickers
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
+from app.core.redis import close_redis
 from app.db.session import dispose_engine
+from app.services import spend
 
 logger = get_logger(__name__)
 
@@ -37,7 +41,9 @@ async def lifespan(app: FastAPI):
         llm_provider=settings.llm_provider,
         model=settings.llm_model,
     )
+    spend.warn_on_startup()
     yield
+    await close_redis()
     await dispose_engine()
 
 
@@ -48,10 +54,28 @@ def create_app() -> FastAPI:
         version="1.0.0",
         lifespan=lifespan,
     )
+    # The API remains same-origin by default. Local browser clients opt in via
+    # CORS_ALLOWED_ORIGINS; this is intentionally a narrow allow-list rather
+    # than a permissive development wildcard. CORS_ALLOWED_ORIGIN_REGEX adds
+    # preview deployments, whose URLs change on every push.
+    cors_origins = [origin.strip() for origin in settings.cors_allowed_origins.split(",") if origin.strip()]
+    cors_origin_regex = settings.cors_allowed_origin_regex or None
+    if cors_origins or cors_origin_regex:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_origin_regex=cors_origin_regex,
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["Authorization", "Content-Type"],
+            max_age=600,
+        )
+    app.add_middleware(InteractiveAttributionMiddleware)
     register_exception_handlers(app)
     app.include_router(health.router)
     app.include_router(tickers.router)
     app.include_router(chat.router)
+    app.include_router(conversations.router)
     app.include_router(jobs.router)
     app.include_router(admin.router)
     return app

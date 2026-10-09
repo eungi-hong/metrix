@@ -12,6 +12,10 @@ retrying only spends quota; a timeout or a 503 may well succeed next time.
 
 from __future__ import annotations
 
+import math
+from datetime import datetime
+from typing import Any
+
 
 class MetrixError(Exception):
     """Base class for everything this application raises on purpose."""
@@ -27,6 +31,18 @@ class TickerNotFoundError(MetrixError):
     def __init__(self, symbol: str) -> None:
         self.symbol = symbol
         super().__init__(f"No price data available for ticker '{symbol}'.")
+
+
+class SymbolNotListed(TickerNotFoundError):
+    """Not in the US symbol directory, so refused before any external call."""
+
+    def __init__(self, symbol: str) -> None:
+        self.symbol = symbol
+        MetrixError.__init__(
+            self,
+            f"'{symbol}' is not a listed US symbol. (Foreign listings, such as RY.TO, "
+            "are served only if added to SYMBOL_ALLOWLIST.)",
+        )
 
 
 class UpstreamError(MetrixError):
@@ -55,7 +71,68 @@ def is_permanent(error: BaseException) -> bool:
     return isinstance(error, MetrixError) and error.permanent
 
 
+class AuthenticationError(MetrixError):
+    """No credentials, or credentials that do not identify an active user. 401."""
+
+    permanent = True
+
+
 class ConfigurationError(MetrixError):
     """A required API key or setting is missing."""
 
     permanent = True
+
+
+class WorkDeferred(Exception):
+    """The work was not done, but not because it failed: it must wait.
+
+    Deliberately not a `MetrixError`. The pipeline catches `MetrixError` to
+    degrade gracefully, recording a failed search or scoring pass against the
+    movement and moving on. Waiting is not a failure of the work, and
+    recording it as one would use up the movement's attempts and mark it
+    FAILED. So these propagate past those handlers to the boundary, where each
+    caller does the right thing: the worker holds or retries the job, the
+    tickers route serves stored data with a warning, and chat answers 503
+    with `Retry-After`.
+    """
+
+    retry_at: datetime
+
+
+class SpendCapReached(WorkDeferred):
+    """A billable call was refused: today's spend cap, or background's share of
+    it. The worker holds the job until `retry_at` without using an attempt."""
+
+    def __init__(self, call_class: str, retry_at: datetime, detail: str) -> None:
+        self.call_class = call_class
+        self.retry_at = retry_at
+        super().__init__(detail)
+
+
+class ProviderBusy(WorkDeferred):
+    """A provider's shared rate limit would make this call wait longer than its
+    caller may (RATE_LIMIT_MAX_WAIT_SECONDS, or the shorter interactive wait).
+    The worker retries the job with backoff; the API answers 503."""
+
+    def __init__(self, provider: str, retry_at: datetime, detail: str) -> None:
+        self.provider = provider
+        self.retry_at = retry_at
+        super().__init__(detail)
+
+
+class RateLimited(Exception):
+    """A caller is over one of their quotas. 429, with Retry-After and the
+    X-RateLimit-* headers from `result` (a `limits.LimitResult`).
+
+    Not a `MetrixError`, for the same reason as `SpendCapReached`: it must
+    reach the HTTP layer, not be absorbed by a degrade-gracefully handler.
+    """
+
+    def __init__(self, quota: str, result: Any, detail: str | None = None) -> None:
+        self.quota = quota
+        self.result = result
+        super().__init__(
+            detail
+            or f"Over the {quota} quota ({result.limit}); retry in "
+            f"{math.ceil(result.retry_after)} s."
+        )

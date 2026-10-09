@@ -22,10 +22,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.exc import StaleDataError
 
+from app.core.errors import WorkDeferred
 from app.core.logging import get_logger
 from app.models.jobs import Job, JobKind
 from app.models.market import Movement
-from app.services import ingestion, prewarm, queue
+from app.services import ingestion, prewarm, queue, symbol_directory
 from app.services.llm import LLMProvider
 from app.services.news import build_news_provider
 from app.services.news.queries import hard_tier_request
@@ -72,17 +73,22 @@ async def handle_ingest_ticker(session: AsyncSession, job: Job, ctx: JobContext)
         return
 
     try:
-        await ingestion.ingest_ticker(
+        result = await ingestion.ingest_ticker(
             session,
             symbol,
             llm=ctx.llm,
             retry_exhausted=bool(job.payload.get("retry_exhausted")),
             progress=ctx.report_progress,
         )
+    except WorkDeferred:
+        raise  # not a failure; ingest_ticker has released the claim
     except Exception as exc:
         await session.rollback()
         await ingestion.mark_ingestion_failed(session, symbol, exc)
         raise
+    if result.deferred is not None:
+        # The prices are in; the rest of the news waits, held or retried.
+        raise result.deferred
 
 
 async def handle_enrich_movement(session: AsyncSession, job: Job, ctx: JobContext) -> None:
@@ -184,10 +190,23 @@ async def handle_prewarm_sector_macro(
     )
 
 
+async def handle_refresh_symbol_directory(
+    session: AsyncSession, job: Job, ctx: JobContext
+) -> None:
+    """Replace the symbol directory with this week's files, or keep the old one.
+
+    A failed download or an implausible result raises, so the queue retries
+    with backoff; the table is untouched until a refresh succeeds.
+    """
+    outcome = await symbol_directory.refresh(session)
+    await ctx.report_progress({"before": outcome.before, "after": outcome.after})
+
+
 HANDLERS: dict[JobKind, Handler] = {
     JobKind.INGEST_TICKER: handle_ingest_ticker,
     JobKind.ENRICH_MOVEMENT: handle_enrich_movement,
     JobKind.SCHEDULE_NIGHTLY: handle_schedule_nightly,
     JobKind.REFRESH_PRICES: handle_refresh_prices,
     JobKind.PREWARM_SECTOR_MACRO: handle_prewarm_sector_macro,
+    JobKind.REFRESH_SYMBOL_DIRECTORY: handle_refresh_symbol_directory,
 }

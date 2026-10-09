@@ -40,6 +40,7 @@ from app.schemas.chat import (
     MovementSource,
 )
 from app.services import demand
+from app.services.auth import Principal
 from app.services.llm import LLMProvider
 
 logger = get_logger(__name__)
@@ -80,15 +81,21 @@ class RetrievedContext:
 
 
 async def answer_question(
-    session: AsyncSession, request: ChatRequest, llm: LLMProvider
+    session: AsyncSession, request: ChatRequest, llm: LLMProvider, principal: Principal
 ) -> ChatResponse:
-    """Retrieve, prompt, answer, and persist one conversation turn."""
-    conversation = await _load_or_create_conversation(session, request.conversation_id)
+    """Retrieve, prompt, answer, and persist one conversation turn.
+
+    Raises `ConversationNotFound` for a `conversation_id` the caller does not
+    own, exactly as for one that does not exist.
+    """
+    conversation = await _load_or_create_conversation(
+        session, request.conversation_id, principal
+    )
 
     ticker = await _resolve_ticker(session, request, conversation)
     if ticker is not None:
         # Persisted with this turn's commit; a turn that fails does not count.
-        await demand.record_demand(session, ticker.symbol)
+        await demand.count_request(session, ticker.symbol, principal)
     context = await _retrieve(session, ticker, request.start, request.end)
 
     history = await _load_history(session, conversation)
@@ -96,7 +103,7 @@ async def answer_question(
         {"role": "user", "content": _render_prompt(request.question, context)}
     ]
 
-    answer = await llm.complete(system=_SYSTEM, messages=messages)
+    answer = await llm.complete(system=_SYSTEM, messages=messages, operation="chat")
     sources = _build_sources(context)
 
     session.add(
@@ -341,14 +348,35 @@ def _build_sources(context: RetrievedContext) -> ChatSources:
 # --------------------------------------------------------------- persistence
 
 
+class ConversationNotFound(LookupError):
+    pass
+
+
+def owns(conversation: Conversation, principal: Principal) -> bool:
+    """Whether `principal` may read and continue `conversation`.
+
+    One owned by neither a user nor an anonymous caller predates ownership:
+    no caller owns it, and only an admin may read it.
+    """
+    if conversation.user_id is not None:
+        return conversation.user_id == principal.user_id
+    if conversation.anonymous_key is not None:
+        return principal.anonymous and conversation.anonymous_key == principal.key
+    return False
+
+
 async def _load_or_create_conversation(
-    session: AsyncSession, conversation_id: str | None
+    session: AsyncSession, conversation_id: str | None, principal: Principal
 ) -> Conversation:
     if conversation_id:
         existing = await session.get(Conversation, conversation_id)
-        if existing is not None:
-            return existing
-    conversation = Conversation()
+        if existing is None or not owns(existing, principal):
+            raise ConversationNotFound(conversation_id)
+        return existing
+    conversation = Conversation(
+        user_id=principal.user_id,
+        anonymous_key=principal.key if principal.anonymous else None,
+    )
     session.add(conversation)
     await session.flush()
     return conversation
