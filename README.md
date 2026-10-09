@@ -7,6 +7,7 @@ news — with an LLM deciding which articles actually explain the move and why.
 ```
 GET  /tickers/{symbol}   stock + news data, nested movement → articles → tier + rationale
 POST /chat               grounded, multi-turn Q&A over that data, with citations
+GET  /jobs/{id}          status, progress and errors of a queued background job
 GET  /health             liveness and which integrations are configured
 ```
 
@@ -17,7 +18,7 @@ GET  /health             liveness and which integrations are configured
 ```bash
 git clone https://github.com/eungi-hong/metrix.git && cd metrix
 cp .env.example .env          # then add your two API keys (below)
-docker compose up --build     # Postgres + migrations + API
+docker compose up --build     # Postgres + migrations + API + worker
 ```
 
 The API is on <http://localhost:8000>, interactive docs at <http://localhost:8000/docs>.
@@ -45,7 +46,11 @@ pip install -r requirements-dev.txt
 docker compose up -d db
 alembic upgrade head
 uvicorn app.main:app --reload
+python -m app.worker           # in a second terminal: runs queued ingestion
 ```
+
+Without the worker, `?wait=true` requests still work, but ingestion that is not
+waited on stays queued.
 
 > Use **Python 3.12 or 3.13** (3.12 is what the image is built on). The pinned
 > `greenlet` and `pydantic-core` ship no wheels for 3.14 and do not compile against it,
@@ -69,12 +74,20 @@ The first request for a ticker has nothing stored, so it triggers ingestion. Use
 curl "http://localhost:8000/tickers/NVDA?wait=true&limit=3"
 ```
 
-Without `wait`, you get `202` immediately and ingestion runs in the background:
+Without `wait`, you get `202` immediately and ingestion is queued for the worker. The
+response carries a `job_id`; asking again while it is queued joins the same job
+rather than starting another:
 
 ```bash
-curl "http://localhost:8000/tickers/NVDA"      # 202, status: "ingesting"
+curl "http://localhost:8000/tickers/NVDA"      # 202, status: "ingesting", job_id: 17
+curl "http://localhost:8000/jobs/17"           # status, attempts, progress, last_error
 curl "http://localhost:8000/tickers/NVDA"      # 200, status: "ready" once finished
 ```
+
+A job that fails on something transient (a timeout, a 5xx, a rate limit) is retried
+with backoff; one that fails on something permanent (an unknown symbol, a missing or
+rejected API key) is marked `dead` at once. The job queue, the worker and the reasons
+behind them are described in [docs/PREWARMING.md](docs/PREWARMING.md).
 
 Response shape — news is nested inside the movement it explains, not returned as a
 second flat list you have to join:
@@ -124,7 +137,7 @@ second flat list you have to join:
 | `include_prices` | Include the daily OHLCV bars themselves, not just the summary. Honours `start`/`end`. Off by default — a year is ~250 rows most callers don't need |
 | `limit`, `offset` | Pagination over movements (`total` is the unpaginated count) |
 | `refresh` | Force re-ingestion even if data is fresh |
-| `wait` | Run any needed ingestion inline instead of in the background |
+| `wait` | Run any needed ingestion inline instead of queueing it for the worker |
 
 ```bash
 # Big down days in 2026 that macro or political news helps explain
@@ -377,7 +390,7 @@ regression tests.
 
 ```
 app/
-  api/routes/     tickers.py, chat.py, health.py   — thin: validate, delegate, shape
+  api/routes/     tickers.py, chat.py, jobs.py, health.py — thin: validate, delegate, shape
   api/errors.py   domain exception → HTTP status, one error body shape
   services/
     movements.py  volatility-adjusted detection — pure, no DB, no network
@@ -387,10 +400,14 @@ app/
     peers.py      competitor resolution (LLM, cached on the ticker)
     relevance.py  the scoring prompt and its structured output
     ingestion.py  orchestration: prices → movements → news → links
+    queue.py      the Postgres job queue: enqueue/dedupe, claim, retry, reap
+    job_handlers.py  what each kind of queued job does
     chat.py       retrieval, prompt assembly, citation labels
     llm/          provider abstraction, Anthropic adapter, uniform error mapping
   models/         SQLAlchemy: tickers, price_history, movements, news_articles,
-                  movement_news_links, news_query_cache, conversations, chat_messages
+                  movement_news_links, news_query_cache, conversations, chat_messages,
+                  jobs, prewarm_runs
+  worker.py       `python -m app.worker`: claim loops, heartbeats, graceful shutdown
   schemas/        Pydantic request/response models
   core/           config (all tunables), logging, domain exceptions
 ```
@@ -430,7 +447,7 @@ flaky news search never costs the caller its price and movement data.
 |---|---|
 | Unknown/delisted ticker | `404 not_found` |
 | Invalid symbol, bad date range | `422` |
-| Cold ticker, background ingestion started | `202` + `status: "ingesting"` |
+| Cold ticker, ingestion queued | `202` + `status: "ingesting"` + `job_id` |
 | Last ingestion failed, nothing stored | `502` + `status: "failed"` and the reason |
 | News API or LLM failed | `502 upstream_unavailable`, or a per-movement warning |
 | Missing API key | `503 configuration_error`, naming the variable |
@@ -462,6 +479,12 @@ lock is a single atomic conditional `UPDATE` on the ticker row, which is correct
 database with transactions, needs no advisory-lock support, and self-heals if the
 holding process dies (a claim older than 15 minutes can be re-taken).
 
+Queued jobs are guarded the same way one level up: at most one queued or running job
+per piece of work (a partial unique index on `jobs.dedupe_key`), and workers claim
+with `FOR UPDATE SKIP LOCKED`, so no two take the same job. The worker's
+`ingest_ticker` job still takes the ticker claim, so a queued run and a `wait=true`
+run never write the same ticker at once.
+
 ---
 
 ## Tests
@@ -471,7 +494,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-110 tests. No Docker, no network, no API keys.
+No Docker, no network, no API keys.
 
 - `tests/test_movements.py` — 35 tests. The detection math: the floor, the sigma
   term, their interaction, the no-lookahead guarantee, direction symmetry, degenerate
@@ -481,15 +504,32 @@ pytest
 - `tests/test_api.py` — a smoke test per endpoint plus filtering, pagination, the
   202/200 ingestion states, idempotent re-ingestion, the concurrency claim, error
   mapping, and multi-turn chat.
-- `tests/test_news.py` — window enforcement, URL-normalized deduplication, and the
-  read-through response cache.
+- `tests/test_news.py` — window enforcement, URL-normalized deduplication, the
+  read-through response cache, its window-aware TTL, and Hard-tier cache sharing.
+- `tests/test_freshness.py` — PARTIAL enrichment, idempotent re-enrichment, and the
+  retry cap on movements that keep failing.
+- `tests/test_queue.py` — the queue's semantics: dedupe and priority bumps, claim
+  order, blocking, backoff, permanent errors, stale locks and heartbeats, the
+  enrichment budget.
+- `tests/test_worker.py` — the worker and job handlers end to end, including
+  graceful shutdown and the follow-up job a PARTIAL enrichment enqueues.
 - `tests/test_show_cli.py` — the renderer's citation parsing, colour gating, and
   sparkline edge cases.
 
 Endpoint tests run on in-memory SQLite with the news provider and LLM stubbed, so
 `pytest` is one command with no dependencies. The models are declared portably
-(`JSONB` on Postgres, `JSON` elsewhere) to make that possible; the Postgres path is
-covered by the migration running under compose.
+(`JSONB` on Postgres, `JSON` elsewhere) to make that possible.
+
+The queue claims jobs with a Postgres-only statement, so its tests also run against
+real Postgres when `TEST_DATABASE_URL` is set, along with `tests/test_postgres.py`
+(concurrent claimers through `SKIP LOCKED`, concurrent budget spending, `NOTIFY`).
+The database named there is wiped, and must have `test` in its name:
+
+```bash
+docker compose up -d db
+docker compose exec db createdb -U metrix metrix_test
+TEST_DATABASE_URL=postgresql+asyncpg://metrix:metrix@localhost:5433/metrix_test pytest
+```
 
 ---
 
@@ -501,7 +541,8 @@ covered by the migration running under compose.
   is exactly the distinction the Hard tier is trying to make downstream.
 - **Article bodies are whatever Exa returns** — usually a summary or the first ~2k
   characters, sometimes paywalled boilerplate. Scoring quality is bounded by that.
-- **No backfill scheduler.** Ingestion is request-triggered. A cron or task queue
-  (Celery/ARQ) would keep tickers warm instead of making the first caller wait.
+- **No backfill scheduler yet.** Ingestion runs through a durable job queue, but is
+  still request-triggered: the first caller for a ticker waits. Scheduled pre-warming
+  is in progress; see [docs/PREWARMING.md](docs/PREWARMING.md).
 - **Relevance is unevaluated.** There is no labelled set, so "the scoring is good" is
   an assertion, not a measurement. See `SUBMISSION.md`.

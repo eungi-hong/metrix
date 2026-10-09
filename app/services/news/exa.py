@@ -117,8 +117,12 @@ class ExaNewsProvider(NewsProvider):
 
         if response.status_code in _RETRYABLE_STATUS:
             raise _RetryableUpstream(f"HTTP {response.status_code}: {response.text[:200]}")
-        if response.status_code == 401:
-            raise NewsProviderError("exa", "rejected the API key (HTTP 401)")
+        if response.status_code in (401, 403):
+            raise NewsProviderError(
+                "exa",
+                f"rejected the API key (HTTP {response.status_code})",
+                permanent=True,
+            )
         if response.status_code >= 400:
             raise NewsProviderError(
                 "exa", f"HTTP {response.status_code}: {response.text[:200]}"

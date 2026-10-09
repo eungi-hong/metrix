@@ -70,7 +70,7 @@ class AnthropicProvider(LLMProvider):
                 output_format=output_model,
             )
         except anthropic.APIError as exc:
-            raise LLMError(self.name, self._describe(exc)) from exc
+            raise self._error(exc) from exc
         except Exception as exc:
             raise LLMError(self.name, f"unexpected failure: {exc}") from exc
 
@@ -97,7 +97,7 @@ class AnthropicProvider(LLMProvider):
                 messages=messages,
             )
         except anthropic.APIError as exc:
-            raise LLMError(self.name, self._describe(exc)) from exc
+            raise self._error(exc) from exc
         except Exception as exc:
             raise LLMError(self.name, f"unexpected failure: {exc}") from exc
 
@@ -113,6 +113,13 @@ class AnthropicProvider(LLMProvider):
     async def aclose(self) -> None:
         if self._client is not None:
             await self._client.close()
+
+    def _error(self, exc: anthropic.APIError) -> LLMError:
+        # A rejected key fails the same way on every retry.
+        permanent = isinstance(
+            exc, (anthropic.AuthenticationError, anthropic.PermissionDeniedError)
+        )
+        return LLMError(self.name, self._describe(exc), permanent=permanent)
 
     def _describe(self, exc: anthropic.APIError) -> str:
         """A message safe to surface, without leaking keys or full payloads."""

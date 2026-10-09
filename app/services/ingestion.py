@@ -26,6 +26,10 @@ supports are removed, the rest are updated in place.
 A movement that keeps failing stops being retried automatically after
 `NEWS_MAX_ATTEMPTS`; only an explicit `refresh=true` tries it again.
 
+A PARTIAL movement does not wait for someone to ask again: the pass that marks
+it PARTIAL enqueues an `enrich_movement` follow-up, in the same transaction,
+to run when its window closes.
+
 Failure policy
 --------------
 Prices are load-bearing: if yfinance fails there is nothing to explain, and
@@ -38,7 +42,9 @@ price and movement data.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import Any
 from datetime import datetime, timedelta, timezone
 
 import sqlalchemy as sa
@@ -52,11 +58,12 @@ from app.core.errors import (
     TickerNotFoundError,
 )
 from app.core.logging import get_logger
-from app.db.session import session_scope
 from app.models.enums import IngestStatus, NewsStatus
+from app.models.jobs import JobKind, JobSource
 from app.models.market import Movement, PriceBar, Ticker
 from app.models.news import MovementNewsLink, NewsArticle, url_fingerprint
 from app.services import prices as price_service
+from app.services import queue
 from app.services.llm import LLMProvider, get_llm_client
 from app.services.movements import DailyReturn, DetectionParams, detect_movements
 from app.services.news import NewsProvider, build_news_provider
@@ -85,6 +92,13 @@ class IngestResult:
     movements_enriched: int = 0
     articles_linked: int = 0
     warnings: list[str] = field(default_factory=list)
+    # The errors behind per-movement failures, so a queued job can decide
+    # whether to retry. `warnings` is the human-readable side of the same.
+    failures: list[MetrixError] = field(default_factory=list)
+
+
+# Handlers pass one in to publish progress on their job (`Job.progress`).
+ProgressCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 # ---------------------------------------------------------------- staleness
@@ -200,12 +214,14 @@ async def ingest_ticker(
     llm: LLMProvider | None = None,
     news_provider: NewsProvider | None = None,
     retry_exhausted: bool = False,
+    progress: ProgressCallback | None = None,
 ) -> IngestResult:
     """Run the full pipeline for `symbol`. Assumes the caller holds the claim.
 
     `retry_exhausted` also retries movements that have failed
     `NEWS_MAX_ATTEMPTS` times; it is what `refresh=true` means for news.
     """
+    report = progress or _no_progress
     symbol = symbol.strip().upper()
     llm = llm or get_llm_client()
     news_provider = news_provider or build_news_provider(session)
@@ -213,6 +229,7 @@ async def ingest_ticker(
 
     ticker = await get_or_create_ticker(session, symbol)
     logger.info("ingest_start", symbol=symbol, ticker_id=ticker.id)
+    await report({"stage": "prices"})
 
     try:
         history = await price_service.fetch_price_history(symbol)
@@ -240,14 +257,16 @@ async def ingest_ticker(
     )[: settings.max_movements_per_ingest]
 
     if budget:
+        await report({"stage": "enriching", "done": 0, "total": len(budget)})
         peers = await resolve_peers(session, ticker, llm)
-        for movement in budget:
+        for done, movement in enumerate(budget, start=1):
             linked = await _enrich_movement(
                 session, ticker, movement, peers, news_provider, llm, result
             )
             result.articles_linked += linked
             result.movements_enriched += 1
             await session.commit()
+            await report({"stage": "enriching", "done": done, "total": len(budget)})
 
     skipped = len(pending) - len(budget)
     if skipped > 0:
@@ -407,18 +426,18 @@ async def _enrich_movement(
     try:
         candidates = await _search_all_tiers(news_provider, context, peers)
     except MetrixError as exc:
-        _record_failure(movement, result, f"{movement.date}: news search: {exc}")
+        _record_failure(movement, result, exc, f"{movement.date}: news search: {exc}")
         return 0
 
     if not candidates:
         # No evidence is not counter-evidence: keep any links an earlier pass made.
-        _mark_enriched(movement)
+        await _mark_enriched(session, movement)
         return 0
 
     try:
         scored = await score_candidates(context, candidates, peers, llm)
     except MetrixError as exc:
-        _record_failure(movement, result, f"{movement.date}: scoring: {exc}")
+        _record_failure(movement, result, exc, f"{movement.date}: scoring: {exc}")
         return 0
 
     window_start, window_end = search_window(movement.date)
@@ -448,17 +467,32 @@ async def _enrich_movement(
             linked += 1
 
     await _prune_links(session, movement, kept_articles)
-    _mark_enriched(movement)
+    await _mark_enriched(session, movement)
     await session.flush()
     return linked
 
 
-def _mark_enriched(movement: Movement) -> None:
-    """COMPLETE if the news window had closed when this pass ran, else PARTIAL."""
+async def _mark_enriched(session: AsyncSession, movement: Movement) -> None:
+    """COMPLETE if the news window had closed when this pass ran, else PARTIAL.
+
+    A PARTIAL movement gets its follow-up enqueued here, in the same
+    transaction as the status, so neither can exist without the other.
+    """
     now = _now()
-    closed = now >= _as_utc(movement.news_window_closes_at)
+    closes_at = _as_utc(movement.news_window_closes_at)
+    closed = now >= closes_at
     movement.news_status = NewsStatus.COMPLETE if closed else NewsStatus.PARTIAL
     movement.news_fetched_at = now
+    if not closed:
+        await queue.enqueue(
+            session,
+            JobKind.ENRICH_MOVEMENT,
+            {"movement_id": movement.id},
+            priority=queue.PRIORITY_FOLLOWUP,
+            dedupe_key=queue.followup_key(movement.id),
+            run_after=closes_at,
+            source=JobSource.FOLLOWUP,
+        )
 
 
 async def _prune_links(
@@ -481,11 +515,14 @@ async def _prune_links(
     )
 
 
-def _record_failure(movement: Movement, result: IngestResult, message: str) -> None:
+def _record_failure(
+    movement: Movement, result: IngestResult, error: MetrixError, message: str
+) -> None:
     """Mark one movement's enrichment as failed without sinking the run."""
     logger.warning("movement_enrichment_failed", detail=message)
     movement.news_status = NewsStatus.FAILED
     result.warnings.append(message)
+    result.failures.append(error)
 
 
 async def _search_all_tiers(
@@ -579,23 +616,72 @@ async def _link(
     return True
 
 
-# ------------------------------------------------------------ background run
+# ------------------------------------------------------------ queued work
 
 
-async def run_ingestion_in_background(
-    symbol: str, *, retry_exhausted: bool = False
+async def enrich_movement(
+    session: AsyncSession,
+    movement_id: int,
+    *,
+    llm: LLMProvider | None = None,
+    news_provider: NewsProvider | None = None,
+    retry_exhausted: bool = False,
+) -> IngestResult | None:
+    """Enrich one movement by id, as a standalone, repeatable unit of work.
+
+    Returns None without doing anything if the movement no longer exists (a
+    price refresh re-ran detection and dropped it) or no longer needs
+    enrichment (another job got there first). Unlike the per-movement step
+    inside `ingest_ticker`, a failure here raises after it is recorded, so the
+    job queue can retry it with backoff.
+    """
+    movement = await session.get(Movement, movement_id)
+    if movement is None:
+        logger.info("enrich_movement_gone", movement_id=movement_id)
+        return None
+    if not needs_enrichment(movement, _now(), retry_exhausted=retry_exhausted):
+        logger.info(
+            "enrich_movement_not_needed",
+            movement_id=movement_id,
+            news_status=movement.news_status.value,
+        )
+        return None
+
+    ticker = await session.get(Ticker, movement.ticker_id)
+    assert ticker is not None  # movements cascade-delete with their ticker
+    llm = llm or get_llm_client()
+    news_provider = news_provider or build_news_provider(session)
+    result = IngestResult(symbol=ticker.symbol)
+
+    peers = await resolve_peers(session, ticker, llm)
+    result.articles_linked = await _enrich_movement(
+        session, ticker, movement, peers, news_provider, llm, result
+    )
+    result.movements_enriched = 1
+    await session.commit()
+
+    if movement.news_status == NewsStatus.FAILED and result.failures:
+        raise result.failures[-1]
+    return result
+
+
+async def mark_ingestion_failed(
+    session: AsyncSession, symbol: str, error: BaseException
 ) -> None:
-    """Entry point for FastAPI BackgroundTasks -- owns its own session."""
-    try:
-        async with session_scope() as session:
-            await ingest_ticker(session, symbol, retry_exhausted=retry_exhausted)
-    except Exception as exc:
-        logger.error("background_ingest_failed", symbol=symbol, error=str(exc))
-        async with session_scope() as session:
-            ticker = await get_ticker(session, symbol)
-            if ticker is not None:
-                ticker.ingest_status = IngestStatus.FAILED
-                ticker.ingest_error = str(exc)[:500]
+    """Record a failed ingestion on the ticker and release its claim. Commits.
+
+    Without this a crashed run leaves the ticker RUNNING until the claim goes
+    stale, and callers see "ingesting" for that long instead of the error.
+    """
+    ticker = await get_ticker(session, symbol)
+    if ticker is not None:
+        ticker.ingest_status = IngestStatus.FAILED
+        ticker.ingest_error = str(error)[:500]
+        await session.commit()
+
+
+async def _no_progress(_: dict[str, Any]) -> None:
+    return None
 
 
 def _now() -> datetime:

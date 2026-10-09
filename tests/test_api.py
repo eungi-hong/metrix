@@ -9,9 +9,11 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.models.enums import IngestStatus
+from app.models.jobs import JobKind, JobSource, JobStatus
 from app.services import ingestion
 from app.core.errors import TickerNotFoundError
 from app.services import prices as price_service
+from tests.conftest import all_jobs
 
 
 # ------------------------------------------------------------------- health
@@ -58,7 +60,9 @@ async def test_get_ticker_ingests_inline_and_returns_nested_news(client):
     assert top["article"]["url"].startswith("https://")
 
 
-async def test_cold_ticker_without_wait_returns_202_and_schedules_ingestion(client):
+async def test_cold_ticker_without_wait_returns_202_and_queues_ingestion(
+    client, session_factory
+):
     response = await client.get("/tickers/COLD")
     assert response.status_code == 202
 
@@ -66,7 +70,46 @@ async def test_cold_ticker_without_wait_returns_202_and_schedules_ingestion(clie
     assert body["status"] == "ingesting"
     assert body["movements"] == []
     assert "wait=true" in body["message"]
-    assert client.scheduled_ingestions == ["COLD"]
+
+    (job,) = await all_jobs(session_factory)
+    assert body["job_id"] == job.id
+    assert job.kind == JobKind.INGEST_TICKER
+    assert job.status == JobStatus.QUEUED
+    assert job.priority == 0
+    assert job.source == JobSource.INTERACTIVE
+    assert job.dedupe_key == "ingest:COLD"
+    assert job.payload == {"symbol": "COLD", "retry_exhausted": False}
+
+
+async def test_a_repeated_request_joins_the_queued_job(client, session_factory):
+    first = (await client.get("/tickers/COLD")).json()
+    second = (await client.get("/tickers/cold")).json()
+
+    assert second["job_id"] == first["job_id"]
+    assert len(await all_jobs(session_factory)) == 1
+
+
+async def test_job_status_endpoint(client):
+    job_id = (await client.get("/tickers/COLD")).json()["job_id"]
+
+    response = await client.get(f"/jobs/{job_id}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == job_id
+    assert body["kind"] == "ingest_ticker"
+    assert body["status"] == "queued"
+    assert body["attempts"] == 0
+    assert body["last_error"] is None
+    assert body["created_at"] and body["run_after"]
+
+
+async def test_unknown_job_is_404(client):
+    assert (await client.get("/jobs/999")).status_code == 404
+
+
+async def test_fresh_data_reports_no_job(client):
+    await client.get("/tickers/TEST", params={"wait": True})
+    assert (await client.get("/tickers/TEST")).json()["job_id"] is None
 
 
 async def test_second_request_is_served_from_storage_without_refetching(client, monkeypatch):
@@ -304,7 +347,7 @@ async def test_a_failed_background_ingestion_is_reported_not_retried_forever(
     assert body["status"] == "failed"
     assert "delisted" in body["message"]
     # And it did not silently kick off yet another doomed ingestion.
-    assert client.scheduled_ingestions == []
+    assert await all_jobs(session_factory) == []
 
 
 async def test_refresh_forces_a_retry_of_a_failed_ticker(client, session_factory):
@@ -349,7 +392,7 @@ async def test_an_old_failure_is_retried_rather_than_reported(client, session_fa
 
     assert response.status_code == 202
     assert response.json()["status"] == "ingesting"
-    assert client.scheduled_ingestions == ["STALE"]
+    assert [job.dedupe_key for job in await all_jobs(session_factory)] == ["ingest:STALE"]
 
 
 # ------------------------------------------------------------- price series

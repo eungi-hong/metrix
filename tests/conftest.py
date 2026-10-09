@@ -9,13 +9,18 @@ path is covered by the migration running under docker-compose.
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+import os
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import pytest
+import sqlalchemy as sa
 from httpx import ASGITransport, AsyncClient
 from pydantic import BaseModel
+from sqlalchemy import event
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
@@ -23,7 +28,7 @@ from app.core.config import settings
 from app.db.base import Base
 from app.db.session import get_session
 from app.main import create_app
-from app.services import ingestion
+from app.models.jobs import Job
 from app.services import prices as price_service
 from app.services.llm import LLMProvider, get_llm_client
 from app.services.peers import PeerSet
@@ -171,18 +176,72 @@ def offline(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(price_service, "fetch_price_history", fake_fetch)
 
 
-@pytest.fixture
-async def session_factory() -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
+@asynccontextmanager
+async def sqlite_session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    """A fresh in-memory database with every table created."""
     engine = create_async_engine(
         "sqlite+aiosqlite:///:memory:",
         poolclass=StaticPool,  # one shared connection, so ":memory:" persists
         connect_args={"check_same_thread": False},
     )
+    _use_real_sqlite_transactions(engine)
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
 
     yield async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
     await engine.dispose()
+
+
+TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+
+# Marks for a test, or a fixture parameter, that needs real Postgres.
+POSTGRES = [
+    pytest.mark.postgres,
+    pytest.mark.skipif(not TEST_DATABASE_URL, reason="TEST_DATABASE_URL is not set"),
+]
+
+
+@asynccontextmanager
+async def postgres_session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
+    """The TEST_DATABASE_URL database, wiped and recreated.
+
+    Refuses any database without "test" in its name, so pointing it at real
+    data by mistake fails instead of dropping every table.
+    """
+    assert TEST_DATABASE_URL is not None
+    if "test" not in (make_url(TEST_DATABASE_URL).database or ""):
+        pytest.fail("TEST_DATABASE_URL must name a throwaway database containing 'test'")
+
+    engine = create_async_engine(TEST_DATABASE_URL, pool_size=20)
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.drop_all)
+        await connection.run_sync(Base.metadata.create_all)
+    yield async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    await engine.dispose()
+
+
+@pytest.fixture
+async def session_factory() -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
+    async with sqlite_session_factory() as factory:
+        yield factory
+
+
+def _use_real_sqlite_transactions(engine) -> None:
+    """Make SQLite begin transactions when SQLAlchemy does, not on first write.
+
+    The sqlite3 driver defers BEGIN until the first INSERT/UPDATE, so a
+    SAVEPOINT issued before any write opens the transaction itself and its
+    RELEASE commits it -- a rolled-back enqueue would survive. Postgres has no
+    such quirk. This is SQLAlchemy's documented recipe for it.
+    """
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _no_driver_transactions(dbapi_connection, _record) -> None:
+        dbapi_connection.isolation_level = None
+
+    @event.listens_for(engine.sync_engine, "begin")
+    def _begin(connection) -> None:
+        connection.exec_driver_sql("BEGIN")
 
 
 @pytest.fixture
@@ -193,7 +252,7 @@ async def session(session_factory) -> AsyncGenerator[AsyncSession, None]:
 
 @pytest.fixture
 async def client(
-    session_factory, stub_llm: StubLLM, monkeypatch: pytest.MonkeyPatch
+    session_factory, stub_llm: StubLLM
 ) -> AsyncGenerator[AsyncClient, None]:
     app = create_app()
 
@@ -204,20 +263,16 @@ async def client(
     app.dependency_overrides[get_session] = override_session
     app.dependency_overrides[get_llm_client] = lambda: stub_llm
 
-    # Background ingestion opens its own session against the real engine;
-    # tests that exercise the async path assert on the response, not the task.
-    scheduled: list[str] = []
-
-    async def fake_background(symbol: str, **kwargs: Any) -> None:
-        scheduled.append(symbol)
-
-    monkeypatch.setattr(ingestion, "run_ingestion_in_background", fake_background)
-
     async with AsyncClient(
         transport=ASGITransport(app=app), base_url="http://test"
     ) as http_client:
-        http_client.scheduled_ingestions = scheduled  # type: ignore[attr-defined]
         yield http_client
+
+
+async def all_jobs(session_factory: async_sessionmaker[AsyncSession]) -> list[Job]:
+    """Every job in the queue, oldest first."""
+    async with session_factory() as session:
+        return list((await session.scalars(sa.select(Job).order_by(Job.id))).all())
 
 
 @pytest.fixture

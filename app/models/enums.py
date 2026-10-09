@@ -59,11 +59,11 @@ class MessageRole(StrEnum):
     ASSISTANT = "assistant"
 
 
-def sa_enum(enum_cls: type[enum.Enum], name: str) -> sa.Enum:
+def sa_enum(enum_cls: type[enum.Enum], name: str, length: int = 16) -> sa.Enum:
     return sa.Enum(
         enum_cls,
         name=name,
         native_enum=False,
-        length=16,
+        length=length,
         values_callable=lambda e: [m.value for m in e],
     )

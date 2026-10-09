@@ -3,21 +3,29 @@
 The route stays thin on purpose: validate and normalize input, decide whether
 ingestion is owed, run the query, shape the response. Every decision with real
 logic in it lives in `app.services.ingestion`.
+
+Ingestion the caller does not wait for is enqueued as an `ingest_ticker` job
+at interactive priority, not run in-process: it survives a restart, is
+retried on transient failure, and goes through the same rate-limited workers
+as everything else. The job's id is returned so the caller can follow it at
+`GET /jobs/{id}`.
 """
 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass, field
 from datetime import date
 
 import sqlalchemy as sa
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import LLMDep, SessionDep
 from app.core.logging import get_logger
 from app.models.enums import Direction, IngestStatus, RelevanceTier
+from app.models.jobs import JobKind, JobSource
 from app.models.market import Movement, PriceBar, Ticker
 from app.models.news import MovementNewsLink
 from app.schemas.market import (
@@ -32,7 +40,7 @@ from app.schemas.market import (
     TickerDetailOut,
     TickerOut,
 )
-from app.services import ingestion
+from app.services import ingestion, queue
 from app.services.llm import LLMProvider
 from app.services.movements import sigma_multiple
 
@@ -52,7 +60,6 @@ async def get_ticker_detail(
     symbol: str,
     session: SessionDep,
     llm: LLMDep,
-    background: BackgroundTasks,
     response: Response,
     start: date | None = Query(None, description="Only movements on or after this date."),
     end: date | None = Query(None, description="Only movements on or before this date."),
@@ -94,15 +101,14 @@ async def get_ticker_detail(
         raise HTTPException(status_code=422, detail="`start` must be on or before `end`.")
 
     ticker = await ingestion.get_ticker(session, symbol)
-    state, message, warnings = await _ensure_data(
-        session, ticker, symbol, background, llm, refresh=refresh, wait=wait
-    )
+    ensured = await _ensure_data(session, ticker, symbol, llm, refresh=refresh, wait=wait)
+    state = ensured.state
 
     ticker = await ingestion.get_ticker(session, symbol)
     if ticker is None:
-        # Only reachable when a background ingestion has not yet created the row.
+        # Defensive: `_ensure_data` creates the row before enqueueing.
         response.status_code = 202
-        return _empty_response(symbol, state, message)
+        return _empty_response(symbol, state, ensured.message, ensured.job_id)
 
     conditions: list[sa.ColumnElement[bool]] = [Movement.ticker_id == ticker.id]
     if start:
@@ -147,7 +153,8 @@ async def get_ticker_detail(
 
     return TickerDetailOut(
         status=state,
-        message=message,
+        message=ensured.message,
+        job_id=ensured.job_id,
         ticker=TickerOut.model_validate(ticker),
         ingest_status=ticker.ingest_status,
         last_ingested_at=ticker.last_ingested_at,
@@ -166,73 +173,85 @@ async def get_ticker_detail(
             limit=limit, offset=offset, total=total or 0, returned=len(movements)
         ),
         movements=[_movement_out(m, tier) for m in movements],
-        warnings=warnings,
+        warnings=ensured.warnings,
     )
+
+
+@dataclass(slots=True)
+class _Ensured:
+    state: IngestState
+    message: str | None = None
+    job_id: int | None = None
+    warnings: list[str] = field(default_factory=list)
+
+
+_ALREADY_RUNNING = "An ingestion is already running for this ticker."
 
 
 async def _ensure_data(
     session: AsyncSession,
     ticker: Ticker | None,
     symbol: str,
-    background: BackgroundTasks,
     llm: LLMProvider,
     *,
     refresh: bool,
     wait: bool,
-) -> tuple[IngestState, str | None, list[str]]:
+) -> _Ensured:
     """Fetch-if-missing / fetch-if-stale. Returns the state to report."""
     has_data = ticker is not None and ticker.last_ingested_at is not None
+    busy: IngestState = "refreshing" if has_data else "ingesting"
     if ticker is not None and not refresh and not ingestion.is_stale(ticker):
-        return "ready", None, []
+        return _Ensured("ready")
 
     # Report a recent failure instead of silently retrying it on every request.
     # Without this a permanently broken symbol (delisted, or a news key that is
     # not valid) reports "ingesting" forever to a polling client and re-runs the
     # whole pipeline each time it is asked. `refresh=true` forces a retry.
     if ticker is not None and not refresh and ingestion.failed_recently(ticker):
-        return (
-            "failed",
-            ticker.ingest_error or "The last ingestion for this ticker failed.",
-            [],
+        return _Ensured(
+            "failed", ticker.ingest_error or "The last ingestion for this ticker failed."
         )
 
     if ticker is not None and ticker.ingest_status == IngestStatus.RUNNING and not wait:
-        return (
-            ("refreshing" if has_data else "ingesting"),
-            "An ingestion is already running for this ticker.",
-            [],
-        )
+        job = await queue.active_job(session, queue.ingest_key(symbol))
+        return _Ensured(busy, _ALREADY_RUNNING, job.id if job else None)
 
     target = ticker or await ingestion.get_or_create_ticker(session, symbol)
-    claimed = await ingestion.claim_ingestion(session, target)
-
-    if not claimed:
-        return (
-            ("refreshing" if has_data else "ingesting"),
-            "An ingestion is already running for this ticker.",
-            [],
-        )
 
     if wait:
+        if not await ingestion.claim_ingestion(session, target):
+            return _Ensured(busy, _ALREADY_RUNNING)
         result = await ingestion.ingest_ticker(
             session, symbol, llm=llm, retry_exhausted=refresh
         )
-        return "ready", None, result.warnings
+        return _Ensured("ready", warnings=result.warnings)
 
-    background.add_task(
-        ingestion.run_ingestion_in_background, symbol, retry_exhausted=refresh
+    # The worker takes the ticker claim when it runs the job, not here: a job
+    # can sit in the queue longer than a claim stays valid. If this ticker is
+    # already queued, `enqueue` returns that job and pulls it to the front.
+    job = await queue.enqueue(
+        session,
+        JobKind.INGEST_TICKER,
+        {"symbol": symbol, "retry_exhausted": refresh},
+        priority=queue.PRIORITY_INTERACTIVE,
+        dedupe_key=queue.ingest_key(symbol),
+        source=JobSource.INTERACTIVE,
     )
+    await session.commit()
+
     if has_data:
-        return (
+        return _Ensured(
             "refreshing",
-            "Showing stored data; a refresh is running in the background.",
-            [],
+            "Showing stored data; a refresh is queued. Follow it at "
+            f"GET /jobs/{job.id}.",
+            job.id,
         )
-    return (
+    return _Ensured(
         "ingesting",
-        "First-time ingestion started. Poll this endpoint, or repeat the request "
-        "with `?wait=true` to block until it finishes.",
-        [],
+        "First-time ingestion queued. Poll this endpoint or GET "
+        f"/jobs/{job.id}, or repeat the request with `?wait=true` to block "
+        "until it finishes.",
+        job.id,
     )
 
 
@@ -328,10 +347,13 @@ def _as_float(value: object | None) -> float | None:
     return None if value is None else float(value)
 
 
-def _empty_response(symbol: str, state: IngestState, message: str | None) -> TickerDetailOut:
+def _empty_response(
+    symbol: str, state: IngestState, message: str | None, job_id: int | None
+) -> TickerDetailOut:
     return TickerDetailOut(
         status=state,
         message=message,
+        job_id=job_id,
         ticker=TickerOut(
             symbol=symbol,
             company_name=None,

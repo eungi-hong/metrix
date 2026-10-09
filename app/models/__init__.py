@@ -13,6 +13,7 @@ from app.models.enums import (
     NewsStatus,
     RelevanceTier,
 )
+from app.models.jobs import Job, JobKind, JobSource, JobStatus, PrewarmRun
 from app.models.market import Movement, PriceBar, Ticker
 from app.models.news import (
     MovementNewsLink,
@@ -28,12 +29,17 @@ __all__ = [
     "Conversation",
     "Direction",
     "IngestStatus",
+    "Job",
+    "JobKind",
+    "JobSource",
+    "JobStatus",
     "MessageRole",
     "Movement",
     "MovementNewsLink",
     "NewsArticle",
     "NewsQueryCache",
     "NewsStatus",
+    "PrewarmRun",
     "PriceBar",
     "RelevanceTier",
     "Ticker",

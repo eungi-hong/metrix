@@ -9,7 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -131,6 +131,69 @@ class Settings(BaseSettings):
         default=30, ge=1, description="TTL for the LLM-resolved competitor list."
     )
 
+    # ---------------------------------------------------------- job queue
+    job_max_attempts: int = Field(
+        default=3,
+        ge=1,
+        description="Default attempts per job before it is marked dead.",
+    )
+    job_retry_base_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        description="First retry delay. Doubles per attempt, with jitter.",
+    )
+    job_retry_max_seconds: float = Field(
+        default=1800.0, gt=0, description="Ceiling on a single retry delay."
+    )
+    job_lock_timeout_minutes: float = Field(
+        default=10.0,
+        gt=0,
+        description=(
+            "A running job whose lock has not been refreshed for this long is "
+            "assumed orphaned (its worker died) and is requeued."
+        ),
+    )
+    job_heartbeat_seconds: float = Field(
+        default=30.0,
+        gt=0,
+        description="How often a worker refreshes the lock on a job it is running.",
+    )
+    job_reap_interval_seconds: float = Field(
+        default=60.0, gt=0, description="How often a worker looks for orphaned jobs."
+    )
+    job_error_max_chars: int = Field(
+        default=2000, ge=100, description="`last_error` is truncated to this length."
+    )
+
+    # ------------------------------------------------------------- worker
+    worker_concurrency: int = Field(
+        default=4, ge=1, description="Concurrent claim loops in one worker process."
+    )
+    worker_interactive_slots: int = Field(
+        default=1,
+        ge=0,
+        description=(
+            "How many of those loops only claim priority-0 (a user is waiting) "
+            "jobs, so a cold ticker never queues behind nightly work."
+        ),
+    )
+    worker_poll_interval_seconds: float = Field(
+        default=2.0, gt=0, description="Sleep between claims when the queue is empty."
+    )
+    worker_poll_jitter_seconds: float = Field(
+        default=1.0,
+        ge=0,
+        description="Random extra sleep, so idle loops do not poll in lockstep.",
+    )
+    worker_shutdown_timeout_seconds: float = Field(
+        default=30.0,
+        ge=0,
+        description=(
+            "On SIGTERM, how long in-flight jobs may run before they are "
+            "released back to the queue."
+        ),
+    )
+
     # ------------------------------------------------------------------ chat
     chat_max_movements_in_context: int = Field(default=12, ge=1)
     chat_max_articles_per_movement: int = Field(default=4, ge=1)
@@ -142,6 +205,20 @@ class Settings(BaseSettings):
         "enough to include every movement, so date-specific questions can be "
         "answered even when that day is not among the most significant.",
     )
+
+    @model_validator(mode="after")
+    def _check_worker_settings(self) -> "Settings":
+        if self.worker_interactive_slots >= self.worker_concurrency:
+            raise ValueError(
+                "WORKER_INTERACTIVE_SLOTS must be smaller than WORKER_CONCURRENCY, "
+                "or nothing but interactive jobs would ever run."
+            )
+        if self.job_heartbeat_seconds >= self.job_lock_timeout_minutes * 60:
+            raise ValueError(
+                "JOB_HEARTBEAT_SECONDS must be shorter than JOB_LOCK_TIMEOUT_MINUTES, "
+                "or healthy jobs would be reaped between heartbeats."
+            )
+        return self
 
     @field_validator("database_url")
     @classmethod

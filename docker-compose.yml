@@ -31,6 +31,30 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    healthcheck:
+      # The worker waits for this, which also means it waits for migrations:
+      # the API container applies them before it starts serving.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  worker:
+    build: .
+    command: ["python", "-m", "app.worker"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://metrix:metrix@db:5432/metrix
+      # The API container migrates; two containers racing `alembic upgrade`
+      # would fail one of them.
+      SKIP_MIGRATIONS: "1"
+    depends_on:
+      api:
+        condition: service_healthy
+    # Longer than WORKER_SHUTDOWN_TIMEOUT_SECONDS (30s), so SIGTERM gets a
+    # graceful drain before Docker resorts to SIGKILL.
+    stop_grace_period: 45s
 
 volumes:
   metrix_pgdata:

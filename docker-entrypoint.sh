@@ -4,8 +4,12 @@
 # wait-for-it loop is needed.
 set -e
 
-echo "Applying database migrations..."
-alembic upgrade head
+# SKIP_MIGRATIONS lets a second container (the worker) share this image without
+# racing the API container to apply the same migrations.
+if [ -z "$SKIP_MIGRATIONS" ]; then
+  echo "Applying database migrations..."
+  alembic upgrade head
+fi
 
-echo "Starting API..."
+echo "Starting: $*"
 exec "$@"

@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.errors import register_exception_handlers
-from app.api.routes import chat, health, tickers
+from app.api.routes import chat, health, jobs, tickers
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
 from app.db.session import dispose_engine
@@ -52,6 +52,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(tickers.router)
     app.include_router(chat.router)
+    app.include_router(jobs.router)
     return app
 
 

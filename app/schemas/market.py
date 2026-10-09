@@ -141,6 +141,11 @@ class TickerDetailOut(BaseModel):
         "while a refresh runs. 'failed' -- the last ingestion failed."
     )
     message: str | None = None
+    job_id: int | None = Field(
+        default=None,
+        description="The queued ingestion job, when this request started or joined "
+        "one. Follow it at GET /jobs/{job_id}.",
+    )
     ticker: TickerOut
     ingest_status: IngestStatus
     last_ingested_at: datetime | None
