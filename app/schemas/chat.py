@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -72,5 +72,38 @@ class ErrorOut(BaseModel):
         "configuration_error",
         "internal_error",
         "spend_cap_reached",
+        "unauthorized",
     ]
     detail: str
+
+
+class ConversationSummary(BaseModel):
+    id: str
+    ticker: str | None
+    created_at: datetime
+    last_message_at: datetime | None
+    messages: int = Field(description="Messages in the conversation, questions and answers.")
+
+
+class ConversationList(BaseModel):
+    conversations: list[ConversationSummary]
+    limit: int
+    offset: int
+    total: int
+
+
+class MessageOut(BaseModel):
+    id: int
+    role: str
+    content: str
+    sources: ChatSources | None = Field(
+        default=None, description="For answers: what was in the prompt it was grounded in."
+    )
+    created_at: datetime
+
+
+class ConversationDetail(BaseModel):
+    id: str
+    ticker: str | None
+    created_at: datetime
+    messages: list[MessageOut]

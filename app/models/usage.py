@@ -51,8 +51,8 @@ class UsageEvent(Base):
     # True when the cost is not the provider's own figure: Exa returned no
     # costDollars, or the model has no entry in LLM_PRICES_JSON.
     cost_estimated: Mapped[bool] = mapped_column(sa.Boolean, nullable=False)
-    # No foreign key yet: users arrive in the next stage.
-    user_id: Mapped[int | None] = mapped_column(sa.Integer)
+    # Users are disabled, never deleted, so the ledger never loses its owner.
+    user_id: Mapped[int | None] = mapped_column(sa.ForeignKey("users.id"))
     job_id: Mapped[int | None] = mapped_column(sa.ForeignKey("jobs.id", ondelete="SET NULL"))
     call_class: Mapped[CallClass] = mapped_column(
         sa_enum(CallClass, "call_class"), nullable=False

@@ -3,27 +3,23 @@ budget, the scheduler tick, and one whole night end to end on SQLite."""
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
 import sqlalchemy as sa
-from httpx import ASGITransport, AsyncClient
+from httpx import AsyncClient
 
 from app.core.config import settings
 from app.core.errors import PriceDataError, TickerNotFoundError
-from app.db.session import get_session
-from app.main import create_app
 from app.models.enums import IngestStatus, NewsStatus
 from app.models.jobs import Job, JobKind, JobSource, JobStatus, PrewarmRun, PrewarmRunStatus
 from app.models.market import Movement
 from app.services import demand, ingestion, prewarm, queue
 from app.services import prices as price_service
 from app.services.demand import UniverseEntry
-from app.services.llm import get_llm_client
 from app.services.news.fixture import FixtureNewsProvider
 from app.worker import Worker
-from tests.conftest import build_price_history
+from tests.conftest import StubLLM, api_app, api_client, build_price_history, new_api_key
 from tests.test_freshness import history_ending_on
 
 TODAY = datetime.now(timezone.utc).date()
@@ -451,7 +447,7 @@ async def test_one_night_end_to_end(db, worker, monkeypatch):
     assert followup.run_after.replace(tzinfo=timezone.utc) > datetime.now(timezone.utc)
 
     # A user asking for the popular ticker now gets it at once, with news.
-    async with api_client(db) as client:
+    async with await signed_in(db) as client:
         body = (await client.get("/tickers/HOT")).json()
         assert body["status"] == "ready" and body["job_id"] is None
         assert body["movements"][0]["news"]
@@ -462,18 +458,10 @@ async def test_one_night_end_to_end(db, worker, monkeypatch):
     assert job.priority == queue.PRIORITY_INTERACTIVE
 
 
-def api_client(db):
-    app = create_app()
-
-    async def override() -> AsyncGenerator:
-        async with db() as session:
-            yield session
-
-    from tests.conftest import StubLLM
-
-    app.dependency_overrides[get_session] = override
-    app.dependency_overrides[get_llm_client] = StubLLM
-    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+async def signed_in(db) -> AsyncClient:
+    """A client for the API on `db`, called as a signed-in user."""
+    _, key = await new_api_key(db)
+    return api_client(api_app(db, StubLLM()), key)
 
 
 # ------------------------------------------------- enrichment on request
@@ -489,7 +477,7 @@ async def test_a_users_request_pulls_a_queued_nightly_enrichment_forward(db, mon
     run = await new_run(db)
     nightly = await enrich_job(db, movement.id, run.id, priority=67)
 
-    async with api_client(db) as client:
+    async with await signed_in(db) as client:
         body = (await client.get("/tickers/LATE")).json()
 
     assert body["status"] == "refreshing"
@@ -506,7 +494,7 @@ async def test_wait_true_enriches_what_is_owed_inline(db):
         ticker.last_ingested_at = datetime.now(timezone.utc)
         await session.commit()
 
-    async with api_client(db) as client:
+    async with await signed_in(db) as client:
         body = (await client.get("/tickers/INLINE", params={"wait": True})).json()
 
     assert body["status"] == "ready"

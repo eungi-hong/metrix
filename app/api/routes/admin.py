@@ -1,4 +1,4 @@
-"""Operator endpoints: trigger a pre-warm, inspect the queue and the day's spend.
+"""Operator endpoints: users and keys, pre-warm runs, the queue, the day's spend.
 
 Guarded by a shared token in the `X-Admin-Token` header. While `ADMIN_TOKEN`
 is unset they answer 503 and say so, rather than being open by default.
@@ -7,40 +7,36 @@ Anything finer-grained (accounts, roles) is out of scope.
 
 from __future__ import annotations
 
-import secrets
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Annotated
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.api.deps import SessionDep
-from app.core.config import settings
-from app.core.errors import ConfigurationError
+from app.api.deps import SessionDep, require_admin
 from app.core.context import CallClass
+from app.models.identity import ApiKey, Plan, User
 from app.models.jobs import Job, JobKind, JobSource, JobStatus, PrewarmRun
 from app.models.usage import UsageEvent
 from app.schemas.admin import (
     DeadJob,
     JobCount,
+    KeyCreate,
+    KeyCreated,
+    KeyOut,
     PrewarmRunOut,
     PrewarmTriggered,
     QueueSummary,
     SpendByOperation,
     SpendByUser,
     UsageSummary,
+    UserCreate,
+    UserOut,
+    UserPatch,
 )
-from app.services import prewarm, queue, schedule, spend
+from app.services import auth, prewarm, queue, schedule, spend
 
 DEAD_JOBS_SHOWN = 20
 TOP_USERS_SHOWN = 10
-
-
-def require_admin(x_admin_token: Annotated[str | None, Header()] = None) -> None:
-    if not settings.admin_token:
-        raise ConfigurationError("ADMIN_TOKEN is not set; the admin endpoints are disabled.")
-    if x_admin_token is None or not secrets.compare_digest(x_admin_token, settings.admin_token):
-        raise HTTPException(status_code=401, detail="Missing or wrong X-Admin-Token.")
 
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
@@ -200,6 +196,60 @@ async def usage_summary(
         interactive_capped=current.interactive_capped,
         background_capped=current.background_capped,
     )
+
+
+@router.post("/users", response_model=UserOut, status_code=201, summary="Create a user")
+async def create_user(body: UserCreate, session: SessionDep) -> UserOut:
+    if body.email and await session.scalar(sa.select(User.id).where(User.email == body.email)):
+        raise HTTPException(status_code=409, detail=f"A user with email {body.email} exists.")
+    user = User(name=body.name, email=body.email, plan=Plan(body.plan))
+    session.add(user)
+    await session.commit()
+    return UserOut.model_validate(user)
+
+
+@router.patch("/users/{user_id}", response_model=UserOut, summary="Change a user's plan, or disable them")
+async def update_user(user_id: int, body: UserPatch, session: SessionDep) -> UserOut:
+    user = await _user(session, user_id)
+    if body.plan is not None:
+        user.plan = Plan(body.plan)
+    if body.disabled is True and user.disabled_at is None:
+        user.disabled_at = datetime.now(timezone.utc)
+    elif body.disabled is False:
+        user.disabled_at = None
+    await session.commit()
+    return UserOut.model_validate(user)
+
+
+@router.post(
+    "/users/{user_id}/keys",
+    response_model=KeyCreated,
+    status_code=201,
+    summary="Issue an API key. The response is the only time the key is shown",
+)
+async def create_key(user_id: int, body: KeyCreate, session: SessionDep) -> KeyCreated:
+    user = await _user(session, user_id)
+    row, key = await auth.issue_key(session, user, label=body.label)
+    await session.commit()
+    return KeyCreated(**KeyOut.model_validate(row).model_dump(), key=key)
+
+
+@router.delete("/keys/{key_id}", response_model=KeyOut, summary="Revoke an API key")
+async def revoke_key(key_id: int, session: SessionDep) -> KeyOut:
+    row = await session.get(ApiKey, key_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"No API key with id {key_id}.")
+    if row.revoked_at is None:
+        row.revoked_at = datetime.now(timezone.utc)
+        await session.commit()
+    return KeyOut.model_validate(row)
+
+
+async def _user(session: SessionDep, user_id: int) -> User:
+    user = await session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail=f"No user with id {user_id}.")
+    return user
 
 
 def _run_out(run: PrewarmRun) -> PrewarmRunOut:

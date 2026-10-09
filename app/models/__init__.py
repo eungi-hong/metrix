@@ -14,9 +14,9 @@ from app.models.enums import (
     NewsStatus,
     RelevanceTier,
 )
-from app.models.jobs import Job, JobKind, JobSource, JobStatus, PrewarmRun
+from app.models.identity import ApiKey, Plan, User
+from app.models.jobs import Job, JobKind, JobRequester, JobSource, JobStatus, PrewarmRun
 from app.models.market import Movement, PriceBar, Ticker
-from app.models.usage import SpendDaily, UsageEvent
 from app.models.news import (
     MovementNewsLink,
     NewsArticle,
@@ -24,8 +24,10 @@ from app.models.news import (
     normalize_url,
     url_fingerprint,
 )
+from app.models.usage import SpendDaily, UsageEvent
 
 __all__ = [
+    "ApiKey",
     "Base",
     "ChatMessage",
     "Conversation",
@@ -33,6 +35,7 @@ __all__ = [
     "IngestStatus",
     "Job",
     "JobKind",
+    "JobRequester",
     "JobSource",
     "JobStatus",
     "MessageRole",
@@ -41,6 +44,7 @@ __all__ = [
     "NewsArticle",
     "NewsQueryCache",
     "NewsStatus",
+    "Plan",
     "PrewarmRun",
     "PriceBar",
     "RelevanceTier",
@@ -48,6 +52,7 @@ __all__ = [
     "Ticker",
     "TickerDemand",
     "UsageEvent",
+    "User",
     "normalize_url",
     "url_fingerprint",
 ]

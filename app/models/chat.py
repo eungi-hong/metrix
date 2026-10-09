@@ -3,6 +3,10 @@
 Persisting turns (rather than making the client echo history back) keeps the
 server the source of truth for what was actually grounded in what, and lets a
 conversation be resumed or audited later.
+
+A conversation belongs to whoever started it: a user (`user_id`), or, when
+AUTH_REQUIRED is off, an anonymous caller (`anonymous_key`, "anon:<ip>").
+One with neither predates ownership and is visible to admins only.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ def new_conversation_id() -> str:
 
 class Conversation(Base, TimestampMixin):
     __tablename__ = "conversations"
+    __table_args__ = (sa.Index("ix_conversations_user_id_created_at", "user_id", "created_at"),)
 
     id: Mapped[str] = mapped_column(
         sa.String(36), primary_key=True, default=new_conversation_id
@@ -30,6 +35,8 @@ class Conversation(Base, TimestampMixin):
     ticker_id: Mapped[int | None] = mapped_column(
         sa.ForeignKey("tickers.id", ondelete="SET NULL")
     )
+    user_id: Mapped[int | None] = mapped_column(sa.ForeignKey("users.id"))
+    anonymous_key: Mapped[str | None] = mapped_column(sa.String(80))
 
     messages: Mapped[list["ChatMessage"]] = relationship(
         back_populates="conversation",

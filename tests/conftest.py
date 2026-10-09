@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 import sqlalchemy as sa
+from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from pydantic import BaseModel
 from sqlalchemy import event
@@ -28,9 +29,10 @@ from app.core.config import settings
 from app.db.base import Base
 from app.db.session import get_session
 from app.main import create_app
+from app.models.identity import Plan, User
 from app.models.jobs import Job
 from app.services import prices as price_service
-from app.services import ratelimit, spend
+from app.services import auth, ratelimit, spend
 from app.services.llm import LLMProvider, get_llm_client
 from app.services.peers import PeerSet
 from app.services.prices import PriceBarData, PriceHistory, TickerProfile
@@ -337,10 +339,24 @@ async def session(session_factory) -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
-@pytest.fixture
-async def client(
-    session_factory, stub_llm: StubLLM
-) -> AsyncGenerator[AsyncClient, None]:
+async def new_api_key(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    plan: Plan = Plan.PRO,
+    name: str = "Test User",
+) -> tuple[User, str]:
+    """A user on `plan` and a working key for them."""
+    async with session_factory() as session:
+        user = User(name=name, plan=plan)
+        session.add(user)
+        await session.flush()
+        _, key = await auth.issue_key(session, user)
+        await session.commit()
+        return user, key
+
+
+def api_app(session_factory: async_sessionmaker[AsyncSession], llm: LLMProvider) -> FastAPI:
+    """The app on `session_factory`, with `llm` in place of the real provider."""
     app = create_app()
 
     async def override_session() -> AsyncGenerator[AsyncSession, None]:
@@ -348,11 +364,27 @@ async def client(
             yield session
 
     app.dependency_overrides[get_session] = override_session
-    app.dependency_overrides[get_llm_client] = lambda: stub_llm
+    app.dependency_overrides[get_llm_client] = lambda: llm
+    return app
 
-    async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test"
-    ) as http_client:
+
+def api_client(app: FastAPI, key: str | None = None) -> AsyncClient:
+    """An HTTP client for `app`, authenticated with `key` if given."""
+    headers = {"Authorization": f"Bearer {key}"} if key else {}
+    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=headers)
+
+
+@pytest.fixture
+async def user_key(session_factory) -> tuple[User, str]:
+    return await new_api_key(session_factory)
+
+
+@pytest.fixture
+async def client(
+    session_factory, stub_llm: StubLLM, user_key: tuple[User, str]
+) -> AsyncGenerator[AsyncClient, None]:
+    """The API, called as a signed-in user on the pro plan."""
+    async with api_client(api_app(session_factory, stub_llm), user_key[1]) as http_client:
         yield http_client
 
 

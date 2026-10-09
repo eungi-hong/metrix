@@ -20,21 +20,18 @@ from app.core import context
 from app.core.config import LLMPrice, Settings, settings
 from app.core.context import CallClass, attributed
 from app.core.errors import SpendCapReached
-from app.db.session import get_session
-from app.main import create_app
 from app.models.enums import IngestStatus, NewsStatus
 from app.models.jobs import Job, JobKind, JobSource, JobStatus, PrewarmRun
 from app.models.market import Movement
 from app.models.usage import SpendDaily, UsageEvent
 from app.services import ingestion, prewarm, queue, spend
-from app.services.llm import get_llm_client
 from app.services.llm.anthropic import AnthropicProvider
 from app.services.news.base import NewsProvider, NewsSearchRequest
 from app.services.news.cache import CachingNewsProvider
 from app.services.news.exa import ExaNewsProvider
 from app.services.relevance import RelevanceReport
 from app.worker import Worker, call_class_for
-from tests.conftest import StubLLM, build_price_history
+from tests.conftest import StubLLM, api_app, api_client, build_price_history
 
 PRICES = {
     "test-model": LLMPrice(
@@ -610,17 +607,9 @@ async def test_the_worker_attributes_spend_to_the_job(db, ledger, monkeypatch):
 
 
 @pytest.fixture
-def capped_client(session_factory):
-    """The API with an LLM that is refused by the cap."""
-    app = create_app()
-
-    async def override():
-        async with session_factory() as session:
-            yield session
-
-    app.dependency_overrides[get_session] = override
-    app.dependency_overrides[get_llm_client] = CappedChat
-    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+def capped_client(session_factory, user_key):
+    """The API, signed in, with an LLM that is refused by the cap."""
+    return api_client(api_app(session_factory, CappedChat()), user_key[1])
 
 
 class CappedChat(StubLLM):
@@ -675,26 +664,21 @@ async def test_queued_work_warns_once_users_are_being_refused(client, session_fa
     assert any("spend cap" in w for w in body["warnings"])
 
 
-async def test_api_spend_is_attributed_as_interactive(session_factory, ledger):
+async def test_api_spend_is_attributed_to_the_user_as_interactive(session_factory, ledger, user_key):
     class MeteredChat(StubLLM):
         async def complete(self, **kwargs: Any) -> str:
             async with spend.metered("anthropic", kwargs["operation"], Decimal("0.01")) as meter:
                 await meter.settle(cost_usd=Decimal("0.004"), estimated=False)
             return "An answer."
 
-    app = create_app()
-
-    async def override():
-        async with session_factory() as session:
-            yield session
-
-    app.dependency_overrides[get_session] = override
-    app.dependency_overrides[get_llm_client] = MeteredChat
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    user, key = user_key
+    async with api_client(api_app(session_factory, MeteredChat()), key) as client:
         assert (await client.post("/chat", json={"question": "Anything new?"})).status_code == 200
 
     (row,) = await ledger_rows(ledger)
-    assert (row.operation, row.call_class, row.job_id) == ("chat", CallClass.INTERACTIVE, None)
+    assert (row.operation, row.call_class, row.job_id, row.user_id) == (
+        "chat", CallClass.INTERACTIVE, None, user.id,
+    )
 
 
 # ------------------------------------------------------------------ admin

@@ -5,14 +5,20 @@ news that caused it — company news, competitor and industry news, and macro/po
 news — with an LLM deciding which articles actually explain the move and why.
 
 ```
-GET  /tickers/{symbol}   stock + news data, nested movement → articles → tier + rationale
-POST /chat               grounded, multi-turn Q&A over that data, with citations
-GET  /jobs/{id}          status, progress and errors of a queued background job
-GET  /health             liveness and which integrations are configured
-POST /admin/prewarm      start a pre-warm run now          (X-Admin-Token)
-GET  /admin/queue        queue health and the last run     (X-Admin-Token)
-GET  /admin/usage        the day's spend, by provider, operation and user  (X-Admin-Token)
+GET    /tickers/{symbol}       stock + news data, nested movement → articles → tier + rationale
+POST   /chat                   grounded, multi-turn Q&A over that data, with citations
+GET    /conversations          your conversations; /conversations/{id} for one, with messages
+GET    /jobs/{id}              status, progress and errors of a queued background job
+GET    /health                 liveness and which integrations are configured
+POST   /admin/users            create a user; PATCH /admin/users/{id} to change plan or disable
+POST   /admin/users/{id}/keys  issue an API key; DELETE /admin/keys/{id} to revoke one
+POST   /admin/prewarm          start a pre-warm run now
+GET    /admin/queue            queue health and the last run
+GET    /admin/usage            the day's spend, by provider, operation and user
 ```
+
+Everything except `/health` needs a key: `Authorization: Bearer mtx_...` for the API,
+`X-Admin-Token` for `/admin`. See [Authentication](#authentication).
 
 ---
 
@@ -22,9 +28,14 @@ GET  /admin/usage        the day's spend, by provider, operation and user  (X-Ad
 git clone https://github.com/eungi-hong/metrix.git && cd metrix
 cp .env.example .env          # then add your two API keys (below)
 docker compose up --build     # Postgres + migrations + API + worker
+
+# Every call needs a Metrix API key. Create a user and one:
+docker compose exec api python scripts/create_api_key.py --name "You" --plan pro
+export METRIX_API_KEY=mtx_...  # the key it printed; it is shown only once
 ```
 
-The API is on <http://localhost:8000>, interactive docs at <http://localhost:8000/docs>.
+The API is on <http://localhost:8000>, interactive docs at <http://localhost:8000/docs>
+(use **Authorize** there to paste the key).
 
 > The `curl` examples below print raw JSON. For the same data as a readable tree,
 > skip to [Reading it in a terminal](#reading-it-in-a-terminal).
@@ -41,6 +52,38 @@ against deterministic synthetic articles. Without an Anthropic key the price and
 movement-detection half still works — movements come back with
 `news_status: "failed"` and a warning explaining why, rather than a 500.
 
+### Authentication
+
+`/tickers`, `/chat`, `/jobs` and `/conversations` need an API key, sent as
+`Authorization: Bearer mtx_...`; `/health` is open, and `/admin` uses `X-Admin-Token`.
+A missing, unknown or revoked key, or one whose user is disabled, gets `401`. Keys are
+shown once, when created, and only their SHA-256 is stored.
+
+Get the first key with `scripts/create_api_key.py` (above), which writes straight to
+the database. After that, with `ADMIN_TOKEN` set, keys and users are managed over the
+API:
+
+```bash
+A="X-Admin-Token: $ADMIN_TOKEN"
+curl -X POST -H "$A" -H 'content-type: application/json' localhost:8000/admin/users \
+  -d '{"name": "Ada", "email": "ada@example.com", "plan": "free"}'      # -> {"id": 2, ...}
+curl -X POST -H "$A" -H 'content-type: application/json' localhost:8000/admin/users/2/keys \
+  -d '{"label": "laptop"}'                                                # -> {"key": "mtx_..."}
+curl -X DELETE -H "$A" localhost:8000/admin/keys/3                       # revoke a key
+curl -X PATCH -H "$A" -H 'content-type: application/json' localhost:8000/admin/users/2 \
+  -d '{"disabled": true}'                                                 # or {"plan": "pro"}
+```
+
+Conversations belong to the user who started them. `GET /conversations` lists yours
+and `GET /conversations/{id}` returns one with its messages and sources; anyone else's
+answers `404`. A job at `GET /jobs/{id}` is visible to the callers whose requests it
+serves.
+
+For local development, `AUTH_REQUIRED=false` serves callers without a key as an
+anonymous user, told apart by IP address. Behind a reverse proxy, set
+`TRUSTED_PROXY_COUNT` so the address comes from `X-Forwarded-For`; by default that
+header is ignored, because a client can write anything into it.
+
 ### Running without Docker
 
 ```bash
@@ -50,6 +93,7 @@ docker compose up -d db
 alembic upgrade head
 uvicorn app.main:app --reload
 python -m app.worker           # in a second terminal: runs queued ingestion
+python scripts/create_api_key.py --name "You" --plan pro   # then export METRIX_API_KEY
 ```
 
 Without the worker, `?wait=true` requests still work, but ingestion that is not
@@ -74,7 +118,7 @@ The first request for a ticker has nothing stored, so it triggers ingestion. Use
 `wait=true` to run it inline and get the finished data back in one call:
 
 ```bash
-curl "http://localhost:8000/tickers/NVDA?wait=true&limit=3"
+curl -H "Authorization: Bearer $METRIX_API_KEY" "http://localhost:8000/tickers/NVDA?wait=true&limit=3"
 ```
 
 Without `wait`, you get `202` immediately and ingestion is queued for the worker. The
@@ -82,9 +126,9 @@ response carries a `job_id`; asking again while it is queued joins the same job
 rather than starting another:
 
 ```bash
-curl "http://localhost:8000/tickers/NVDA"      # 202, status: "ingesting", job_id: 17
-curl "http://localhost:8000/jobs/17"           # status, attempts, progress, last_error
-curl "http://localhost:8000/tickers/NVDA"      # 200, status: "ready" once finished
+curl -H "Authorization: Bearer $METRIX_API_KEY" "http://localhost:8000/tickers/NVDA"      # 202, status: "ingesting", job_id: 17
+curl -H "Authorization: Bearer $METRIX_API_KEY" "http://localhost:8000/jobs/17"           # status, attempts, progress, last_error
+curl -H "Authorization: Bearer $METRIX_API_KEY" "http://localhost:8000/tickers/NVDA"      # 200, status: "ready" once finished
 ```
 
 A job that fails on something transient (a timeout, a 5xx, a rate limit) is retried
@@ -144,15 +188,15 @@ second flat list you have to join:
 
 ```bash
 # Big down days in 2026 that macro or political news helps explain
-curl "http://localhost:8000/tickers/NVDA?start=2026-01-01&direction=down&min_magnitude_pct=4&tier=hard"
+curl -H "Authorization: Bearer $METRIX_API_KEY" "http://localhost:8000/tickers/NVDA?start=2026-01-01&direction=down&min_magnitude_pct=4&tier=hard"
 
 # Second page of everything explained by company-specific or industry news
-curl "http://localhost:8000/tickers/NVDA?tier=easy&tier=medium&limit=10&offset=10"
+curl -H "Authorization: Bearer $METRIX_API_KEY" "http://localhost:8000/tickers/NVDA?tier=easy&tier=medium&limit=10&offset=10"
 ```
 
 ```bash
 # The price series, for charting
-curl "http://localhost:8000/tickers/NVDA?include_prices=true&limit=0" | jq '.prices[:3]'
+curl -H "Authorization: Bearer $METRIX_API_KEY" "http://localhost:8000/tickers/NVDA?include_prices=true&limit=0" | jq '.prices[:3]'
 ```
 
 ### Pre-warming
@@ -201,7 +245,7 @@ How the cap is enforced, and why it cannot be overshot by concurrent calls, is i
 ### Chat
 
 ```bash
-curl -X POST http://localhost:8000/chat \
+curl -X POST http://localhost:8000/chat -H "Authorization: Bearer $METRIX_API_KEY" \
   -H 'content-type: application/json' \
   -d '{"ticker": "NVDA", "question": "What drove the biggest drop this year?"}'
 ```
@@ -222,7 +266,7 @@ curl -X POST http://localhost:8000/chat \
 Multi-turn — pass `conversation_id` back, and the ticker carries over:
 
 ```bash
-curl -X POST http://localhost:8000/chat -H 'content-type: application/json' \
+curl -X POST http://localhost:8000/chat -H "Authorization: Bearer $METRIX_API_KEY" -H 'content-type: application/json' \
   -d '{"conversation_id": "6f1c...", "question": "Was that company news or macro?"}'
 ```
 
@@ -294,6 +338,7 @@ ready · 22 movement(s), showing 3
 | `--json` | Print the raw API payload instead of the tree |
 | `--color auto\|always\|never` | Default `auto`: on for a terminal, off when piped |
 | `--base-url URL` | Default `$METRIX_URL`, else `http://localhost:8000` |
+| `--api-key KEY` | Default `$METRIX_API_KEY` |
 | `--timeout SECONDS` | HTTP timeout (default 900, generous for `--wait`) |
 
 Colour is on for a terminal and off when piped, and it is never the only signal —
@@ -454,6 +499,7 @@ app/
     schedule.py   when it runs: 17:15 New York, weekdays, DST-correct
     ratelimit.py  per-provider token buckets for Exa, Anthropic and yfinance
     spend.py      the spend ledger and the daily cap: reserve, settle, refuse
+    auth.py       API keys (issue, check, revoke) and the caller's identity
     job_handlers.py  what each kind of queued job does
     chat.py       retrieval, prompt assembly, citation labels
     llm/          provider abstraction, Anthropic adapter, uniform error mapping
@@ -584,6 +630,9 @@ No Docker, no network, no API keys.
   background share, metering at both seams, how a refusal is held in the worker and
   served in the API, attribution, and `/admin/usage`. `tests/test_postgres.py` races
   forty reservations for one cap on real Postgres.
+- `tests/test_auth.py` — API keys and every 401, anonymous callers and the
+  `X-Forwarded-For` rule, who may see which job and conversation, the admin user and key
+  endpoints, and the bootstrap script.
 - `tests/test_show_cli.py` — the renderer's citation parsing, colour gating, and
   sparkline edge cases.
 

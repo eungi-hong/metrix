@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.identity import Plan
 from app.models.jobs import JobKind, JobStatus, PrewarmRunStatus
 
 
@@ -96,3 +98,50 @@ class UsageSummary(BaseModel):
     )
     interactive_capped: bool = Field(description="An interactive call has been refused today.")
     background_capped: bool = Field(description="A background call has been refused today.")
+
+
+StoredPlan = Literal["free", "pro", "internal"]
+
+
+class UserCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    email: str | None = Field(default=None, max_length=320)
+    plan: StoredPlan = "free"
+
+
+class UserPatch(BaseModel):
+    plan: StoredPlan | None = None
+    disabled: bool | None = Field(
+        default=None, description="true disables the user (every key stops working); false re-enables."
+    )
+
+
+class UserOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    email: str | None
+    plan: Plan
+    created_at: datetime
+    disabled_at: datetime | None
+
+
+class KeyCreate(BaseModel):
+    label: str | None = Field(default=None, max_length=200)
+
+
+class KeyOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    user_id: int
+    prefix: str = Field(description="The key's first characters: how to recognise it, not use it.")
+    label: str | None
+    created_at: datetime
+    last_used_at: datetime | None
+    revoked_at: datetime | None
+
+
+class KeyCreated(KeyOut):
+    key: str = Field(description="The API key. Shown this once; only its hash is stored.")

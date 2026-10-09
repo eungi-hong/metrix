@@ -27,8 +27,8 @@ is never run twice.
 
 Spending
 --------
-Each job runs with its attribution set (`app.core.context`): its id, and the
-call class the spend cap draws on, `interactive` for priority 0 and
+Each job runs with its attribution set (`app.core.context`): its id, the
+user whose request created it, and the call class the spend cap draws on, `interactive` for priority 0 and
 `background` otherwise. A job the cap refuses is held until the cap resets
 (`queue.hold`), not failed: it keeps its attempts and its movement stays as it
 was.
@@ -185,7 +185,7 @@ class Worker:
             async with self._session_factory() as session:
                 try:
                     with attributed(
-                        call_class=call_class_for(job), job_id=job.id, user_id=None
+                        call_class=call_class_for(job), job_id=job.id, user_id=job.user_id
                     ):
                         await self._handlers[job.kind](session, job, context)
                 except SpendCapReached as exc:

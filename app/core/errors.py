@@ -57,6 +57,12 @@ def is_permanent(error: BaseException) -> bool:
     return isinstance(error, MetrixError) and error.permanent
 
 
+class AuthenticationError(MetrixError):
+    """No credentials, or credentials that do not identify an active user. 401."""
+
+    permanent = True
+
+
 class ConfigurationError(MetrixError):
     """A required API key or setting is missing."""
 

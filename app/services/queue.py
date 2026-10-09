@@ -28,6 +28,10 @@ Semantics
   it back to wait until the cap resets, gives back its attempt, and marks it
   `hold_reason = "spend_cap"`. Waiting for money is not a failure, and must
   not walk a job toward DEAD.
+* `requested_by` names the caller a request was for. Each one is recorded
+  against the job, whether the job was created or the request folded into
+  it, and decides who may see it at `GET /jobs/{id}`. `user_id` is kept
+  only from the request that created the job: its spend is attributed there.
 * A worker that dies leaves its jobs RUNNING. `reap_stale` requeues any whose
   lock has not been refreshed within `JOB_LOCK_TIMEOUT_MINUTES`; a live
   worker refreshes its locks with `heartbeat`, so a slow job is not run twice.
@@ -50,6 +54,8 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -61,6 +67,7 @@ from app.models.jobs import (
     ACTIVE_JOB_STATUSES,
     Job,
     JobKind,
+    JobRequester,
     JobSource,
     JobStatus,
     PrewarmRun,
@@ -151,6 +158,8 @@ async def enqueue(
     blocked_by_key: str | None = None,
     run_id: int | None = None,
     max_attempts: int | None = None,
+    user_id: int | None = None,
+    requested_by: str | None = None,
     now: datetime | None = None,
 ) -> Job:
     """Add a job, or fold this request into the active job with the same key.
@@ -169,6 +178,8 @@ async def enqueue(
         blocked_by_key=blocked_by_key,
         run_id=run_id,
         max_attempts=max_attempts,
+        user_id=user_id,
+        requested_by=requested_by,
         now=now,
     )
     return job
@@ -186,6 +197,8 @@ async def enqueue_checked(
     blocked_by_key: str | None = None,
     run_id: int | None = None,
     max_attempts: int | None = None,
+    user_id: int | None = None,
+    requested_by: str | None = None,
     now: datetime | None = None,
 ) -> tuple[Job, bool]:
     """`enqueue`, also saying whether a new job was created (True) or the
@@ -207,6 +220,7 @@ async def enqueue_checked(
             max_attempts=max_attempts or settings.job_max_attempts,
             source=source,
             run_id=run_id,
+            user_id=user_id,
         )
         try:
             # Two enqueuers can both see no active job and both insert. The
@@ -229,9 +243,33 @@ async def enqueue_checked(
                 run_after=run_after.isoformat(),
             )
             await _notify(session, job.id)
+            await add_requester(session, job.id, requested_by)
             return job, True
 
-    return await _fold_into(session, existing, priority=priority, run_after=run_after), False
+    job = await _fold_into(session, existing, priority=priority, run_after=run_after)
+    await add_requester(session, job.id, requested_by)
+    return job, False
+
+
+async def add_requester(session: AsyncSession, job_id: int, requester: str | None) -> None:
+    if requester is None:
+        return
+    insert = pg_insert if _dialect(session) == "postgresql" else sqlite_insert
+    await session.execute(
+        insert(JobRequester)
+        .values(job_id=job_id, requester=requester)
+        .on_conflict_do_nothing(index_elements=[JobRequester.job_id, JobRequester.requester])
+    )
+
+
+async def is_requester(session: AsyncSession, job_id: int, requester: str) -> bool:
+    return (
+        await session.scalar(
+            sa.select(sa.literal(True)).where(
+                JobRequester.job_id == job_id, JobRequester.requester == requester
+            )
+        )
+    ) is not None
 
 
 async def _fold_into(

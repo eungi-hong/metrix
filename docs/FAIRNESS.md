@@ -101,3 +101,44 @@ background spend; spend and call counts by provider and operation, with how many
 were estimates; the top ten users by spend, once users exist; the cap and background
 cap; what is reserved by calls in flight; and the headroom left for each class.
 `GET /admin/queue` now also counts the jobs held by the cap.
+
+## Identity
+
+Before this stage anyone could call anything, and a conversation belonged to nobody:
+whoever held its id could read or continue it. Quotas, fair shares and the top-users
+view of the ledger all need to know who is calling.
+
+Identity is API keys we issue, not logins or an OAuth provider: enough to attribute
+spend, enforce per-user quotas and own conversations. One dependency,
+`CurrentUser` in `app/api/deps.py`, decides who a request is from, so a later move to
+JWT or OAuth changes that function and nothing that depends on it.
+
+A key is `mtx_` and 32 random bytes. Only its SHA-256 is stored. A fast hash is right
+for a random 256-bit token, where it would be wrong for a password: a slow hash exists
+to make guessing expensive, and nothing guesses 256 random bits, so bcrypt would add
+latency to every request and no security. The key is found by its prefix and its hash
+compared with `secrets.compare_digest`. The brief asked for the first eight characters
+as the prefix, but four of those are `mtx_`, leaving 24 random bits, which would
+collide within a few thousand keys. The prefix is therefore `mtx_` plus eight random
+characters (48 bits), and issuing a key simply draws again on the rare collision. An
+unknown key, a revoked key and a disabled user all get the same 401, so the response
+reveals nothing about which keys exist; `auth_failed` logs the reason, without any of
+the key. `last_used_at` is written at most once per `API_KEY_TOUCH_INTERVAL_MINUTES`,
+so authenticating is not a write on every request.
+
+With `AUTH_REQUIRED=false` a caller without a key becomes an anonymous principal
+keyed by client IP, on the `anonymous` plan; a key that is sent is still checked. The
+IP is the socket peer. `X-Forwarded-For` is trusted only when `TRUSTED_PROXY_COUNT` is
+set, and then only the entry the outermost trusted proxy wrote: everything to its left
+the client could have written itself.
+
+A conversation is owned by the caller who started it. Reading or continuing anyone
+else's answers 404, not 403, so its existence is not revealed, and an unknown id gets
+the same 404. (It used to start a new conversation silently.) Conversations from before
+this stage have no owner and are readable only with the admin token.
+
+A job is visible at `GET /jobs/{id}` to every caller whose request it serves, recorded
+in `job_requesters`. A column on the job would not do: deduplication folds a second
+user's request into the first user's job and hands both of them its id. The job's own
+`user_id` is the user whose request created it, and the worker attributes its spend
+to them. Nightly jobs serve no request and are admin-only.

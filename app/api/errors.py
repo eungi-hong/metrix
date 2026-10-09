@@ -13,6 +13,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from app.core.errors import (
+    AuthenticationError,
     ConfigurationError,
     LLMError,
     MetrixError,
@@ -36,6 +37,14 @@ def register_exception_handlers(app: FastAPI) -> None:
     @app.exception_handler(TickerNotFoundError)
     async def _not_found(request: Request, exc: TickerNotFoundError) -> JSONResponse:
         return JSONResponse(status_code=404, content=_body("not_found", str(exc)))
+
+    @app.exception_handler(AuthenticationError)
+    async def _unauthenticated(request: Request, exc: AuthenticationError) -> JSONResponse:
+        return JSONResponse(
+            status_code=401,
+            content=_body("unauthorized", str(exc)),
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     @app.exception_handler(ConfigurationError)
     async def _misconfigured(

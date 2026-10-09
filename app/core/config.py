@@ -14,7 +14,6 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
-
 # Calendar days convert to trading days at roughly 5 in 7 (ignoring holidays).
 TRADING_DAYS_PER_WEEK = 5
 
@@ -213,6 +212,27 @@ class Settings(BaseSettings):
         ge=0,
         description="Movement enrichments (news searches + one LLM call each) a "
         "nightly run may spend. The rest wait for demand or the next night.",
+    )
+    # ------------------------------------------------------------ identity
+    auth_required: bool = Field(
+        default=True,
+        description="Require an API key (Authorization: Bearer mtx_...) on /tickers, "
+        "/chat, /jobs and /conversations. When false, callers without one are "
+        "served as an anonymous principal, keyed by client IP, on the "
+        "restrictive anonymous plan. A key that is sent is always checked.",
+    )
+    trusted_proxy_count: int = Field(
+        default=0,
+        ge=0,
+        description="How many reverse proxies in front of the API append to "
+        "X-Forwarded-For. 0 (the default) ignores the header and uses the socket "
+        "peer, since a client can write anything into it.",
+    )
+    api_key_touch_interval_minutes: float = Field(
+        default=5.0,
+        ge=0,
+        description="A key's last_used_at is refreshed at most this often, so "
+        "authenticating is not a write on every request.",
     )
     admin_token: str | None = Field(
         default=None,
