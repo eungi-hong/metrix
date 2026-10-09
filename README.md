@@ -84,12 +84,51 @@ anonymous user, told apart by IP address. Behind a reverse proxy, set
 `TRUSTED_PROXY_COUNT` so the address comes from `X-Forwarded-For`; by default that
 header is ignored, because a client can write anything into it.
 
+### Quotas
+
+Each user has a plan (`free`, `pro`, `internal`; `anonymous` for callers without a
+key when `AUTH_REQUIRED=false`), and each plan a set of quotas:
+
+| quota | anonymous | free | pro | internal | counts |
+|---|---|---|---|---|---|
+| `requests_per_minute` | 30 | 60 | 300 | 1200 | every API call |
+| `chat_per_minute` | 2 | 5 | 20 | 60 | chat turns |
+| `chat_per_day` | 10 | 50 | 500 | 5000 | chat turns |
+| `cold_ingests_per_day` | 3 | 10 | 100 | 1000 | requests that start new ingestion or news work |
+| `refresh_per_day` | 0 | 5 | 50 | 500 | `refresh=true` requests that start work |
+| `allow_wait` | no | no | yes | yes | whether `wait=true` may run work inline |
+
+Override any of them with `PLAN_LIMITS_JSON`, e.g. `{"free": {"chat_per_day": 20}}`.
+Days are UTC. A request for a warm ticker, or one that joins work someone already
+queued, costs nothing from `cold_ingests_per_day`.
+
+Every response to an authenticated call carries the per-minute quota:
+`X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` (seconds until
+it is fully reset). Over a quota, the answer is `429` with `Retry-After` and those
+headers for the quota that refused, and a body naming it:
+
+```json
+{"error": "rate_limited", "detail": "Over the chat_per_day quota (50); retry in 31122 s."}
+```
+
+A chat turn that fails on our side (the model is down, or the daily spend cap is
+reached) gives its quota back. A stale ticker you are out of cold ingests for is
+served from storage with a warning rather than refused. `wait=true` on a plan without
+it is queued instead, with a warning; where it is allowed, at most
+`API_MAX_INLINE_INGESTIONS` run at once per API process, and past that the answer is
+`429`.
+
+Quotas are counted in Redis (`REDIS_URL`), shared by every API process. If Redis is
+unreachable they keep working per process, and `/health` reports `"redis":
+"unreachable"`. Why this design, and what each failure looks like, is in
+[docs/FAIRNESS.md](docs/FAIRNESS.md).
+
 ### Running without Docker
 
 ```bash
 python3.13 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-dev.txt
-docker compose up -d db
+docker compose up -d db redis
 alembic upgrade head
 uvicorn app.main:app --reload
 python -m app.worker           # in a second terminal: runs queued ingestion
@@ -500,6 +539,8 @@ app/
     ratelimit.py  per-provider token buckets for Exa, Anthropic and yfinance
     spend.py      the spend ledger and the daily cap: reserve, settle, refuse
     auth.py       API keys (issue, check, revoke) and the caller's identity
+    limits.py     GCRA and daily counters, on Redis or in memory, with fall-back
+    quotas.py     per-plan quotas: charge, refund
     job_handlers.py  what each kind of queued job does
     chat.py       retrieval, prompt assembly, citation labels
     llm/          provider abstraction, Anthropic adapter, uniform error mapping
@@ -633,6 +674,11 @@ No Docker, no network, no API keys.
 - `tests/test_auth.py` — API keys and every 401, anonymous callers and the
   `X-Forwarded-For` rule, who may see which job and conversation, the admin user and key
   endpoints, and the bootstrap script.
+- `tests/test_limits.py` — the GCRA math on a fake clock, the limit-store contract
+  (in memory, and on real Redis when `TEST_REDIS_URL` is set), and the fall-back when
+  Redis is unreachable.
+- `tests/test_quotas.py` — 429s and their headers, chat's charge and refund, cold
+  ingests and refreshes, `wait=true` and its inline slots, and `/health` on Redis.
 - `tests/test_show_cli.py` — the renderer's citation parsing, colour gating, and
   sparkline edge cases.
 
@@ -645,10 +691,14 @@ real Postgres when `TEST_DATABASE_URL` is set, along with `tests/test_postgres.p
 (concurrent claimers through `SKIP LOCKED`, concurrent budget spending, `NOTIFY`).
 The database named there is wiped, and must have `test` in its name:
 
+The limiter's contract tests run against real Redis the same way, when
+`TEST_REDIS_URL` is set; the Redis database named there is flushed, so use a spare one:
+
 ```bash
-docker compose up -d db
+docker compose up -d db redis
 docker compose exec db createdb -U metrix metrix_test
-TEST_DATABASE_URL=postgresql+asyncpg://metrix:metrix@localhost:5433/metrix_test pytest
+TEST_DATABASE_URL=postgresql+asyncpg://metrix:metrix@localhost:5433/metrix_test \
+TEST_REDIS_URL=redis://localhost:6380/15 pytest
 ```
 
 ---

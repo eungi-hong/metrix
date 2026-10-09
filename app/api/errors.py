@@ -17,6 +17,7 @@ from app.core.errors import (
     ConfigurationError,
     LLMError,
     MetrixError,
+    RateLimited,
     SpendCapReached,
     TickerNotFoundError,
     UpstreamError,
@@ -70,6 +71,14 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.warning("upstream_error", provider=exc.provider, detail=str(exc))
         return JSONResponse(
             status_code=502, content=_body("upstream_unavailable", str(exc))
+        )
+
+    @app.exception_handler(RateLimited)
+    async def _rate_limited(request: Request, exc: RateLimited) -> JSONResponse:
+        headers = exc.result.headers()
+        headers["Retry-After"] = str(max(math.ceil(exc.result.retry_after), 1))
+        return JSONResponse(
+            status_code=429, content=_body("rate_limited", str(exc)), headers=headers
         )
 
     @app.exception_handler(SpendCapReached)

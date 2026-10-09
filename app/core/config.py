@@ -27,6 +27,42 @@ class LLMPrice(BaseModel):
     cache_write_per_mtok: float = Field(ge=0)
 
 
+class PlanLimits(BaseModel):
+    """What one plan may do. Every count is per principal: a user, or an
+    anonymous caller's IP address."""
+
+    requests_per_minute: int = Field(ge=0, description="Every authenticated API call.")
+    chat_per_minute: int = Field(ge=0)
+    chat_per_day: int = Field(ge=0)
+    cold_ingests_per_day: int = Field(
+        ge=0, description="Requests that start new ingestion or news work; a warm ticker never counts."
+    )
+    refresh_per_day: int = Field(ge=0, description="refresh=true requests that cause work.")
+    allow_wait: bool = Field(description="Whether wait=true may run work inline in the API.")
+
+
+# Starting points, meant to be tuned. Anonymous callers (AUTH_REQUIRED=false)
+# get the least, and cannot force refreshes or run work inline.
+DEFAULT_PLAN_LIMITS: dict[str, PlanLimits] = {
+    "anonymous": PlanLimits(
+        requests_per_minute=30, chat_per_minute=2, chat_per_day=10,
+        cold_ingests_per_day=3, refresh_per_day=0, allow_wait=False,
+    ),
+    "free": PlanLimits(
+        requests_per_minute=60, chat_per_minute=5, chat_per_day=50,
+        cold_ingests_per_day=10, refresh_per_day=5, allow_wait=False,
+    ),
+    "pro": PlanLimits(
+        requests_per_minute=300, chat_per_minute=20, chat_per_day=500,
+        cold_ingests_per_day=100, refresh_per_day=50, allow_wait=True,
+    ),
+    "internal": PlanLimits(
+        requests_per_minute=1200, chat_per_minute=60, chat_per_day=5000,
+        cold_ingests_per_day=1000, refresh_per_day=500, allow_wait=True,
+    ),
+}
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -234,6 +270,44 @@ class Settings(BaseSettings):
         description="A key's last_used_at is refreshed at most this often, so "
         "authenticating is not a write on every request.",
     )
+    plan_limits_json: Annotated[dict[str, PlanLimits], NoDecode] = Field(
+        default_factory=lambda: dict(DEFAULT_PLAN_LIMITS),
+        description="JSON map of plan -> limits, overriding the defaults field by "
+        "field, e.g. {\"free\": {\"chat_per_day\": 20}}. Plans: anonymous, free, "
+        "pro, internal.",
+    )
+    api_max_inline_ingestions: int = Field(
+        default=2,
+        ge=0,
+        description="wait=true requests running work inline at once, per API "
+        "process. Past this they get 429, so inline work can never take over "
+        "the API's capacity.",
+    )
+
+    # -------------------------------------------------------------- redis
+    redis_url: str | None = Field(
+        default=None,
+        description="Redis for per-user limits (and, later, shared provider rate "
+        "limits). Unset: per-process in-memory limits, with a warning.",
+    )
+    redis_timeout_seconds: float = Field(
+        default=0.25,
+        gt=0,
+        description="Connect and command timeout. Short: a limit check is on every "
+        "request, and a slow Redis must fall back rather than slow the API.",
+    )
+    redis_retry_seconds: float = Field(
+        default=5.0,
+        gt=0,
+        description="After Redis fails, use the in-memory fallback for this long "
+        "before trying Redis again, so an outage costs one timeout, not one per request.",
+    )
+    limiter_fallback_log_seconds: float = Field(
+        default=60.0,
+        gt=0,
+        description="limiter_fallback is logged at most this often while Redis is down.",
+    )
+
     admin_token: str | None = Field(
         default=None,
         description="Required in the X-Admin-Token header by /admin endpoints, "
@@ -430,6 +504,40 @@ class Settings(BaseSettings):
                     f"cache_write_per_mtok (problem with: {fields or 'the entry'})"
                 ) from exc
         return prices
+
+    @field_validator("plan_limits_json", mode="before")
+    @classmethod
+    def _parse_plan_limits(cls, v: Any) -> Any:
+        if not isinstance(v, str):
+            return v
+        if not v.strip():
+            return dict(DEFAULT_PLAN_LIMITS)
+        try:
+            raw = json.loads(v)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"PLAN_LIMITS_JSON is not valid JSON: {exc}") from exc
+        if not isinstance(raw, dict):
+            raise ValueError("PLAN_LIMITS_JSON must be a JSON object keyed by plan")
+        unknown = sorted(set(raw) - set(DEFAULT_PLAN_LIMITS))
+        if unknown:
+            raise ValueError(
+                f"PLAN_LIMITS_JSON has unknown plan(s) {unknown}; "
+                f"plans are {sorted(DEFAULT_PLAN_LIMITS)}"
+            )
+        limits = dict(DEFAULT_PLAN_LIMITS)
+        for plan, overrides in raw.items():
+            if not isinstance(overrides, dict):
+                raise ValueError(f"PLAN_LIMITS_JSON entry for '{plan}' must be an object")
+            try:
+                limits[plan] = PlanLimits.model_validate(
+                    DEFAULT_PLAN_LIMITS[plan].model_dump() | overrides
+                )
+            except ValidationError as exc:
+                problems = "; ".join(
+                    f"{e['loc'][0]}: {e['msg']}" for e in exc.errors() if e["loc"]
+                )
+                raise ValueError(f"PLAN_LIMITS_JSON entry for '{plan}': {problems}") from exc
+        return limits
 
     @field_validator("daily_spend_cap_usd", mode="before")
     @classmethod

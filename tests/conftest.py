@@ -32,7 +32,7 @@ from app.main import create_app
 from app.models.identity import Plan, User
 from app.models.jobs import Job
 from app.services import prices as price_service
-from app.services import auth, ratelimit, spend
+from app.services import auth, limits, ratelimit, spend
 from app.services.llm import LLMProvider, get_llm_client
 from app.services.peers import PeerSet
 from app.services.prices import PriceBarData, PriceHistory, TickerProfile
@@ -205,6 +205,17 @@ class _NoLedger:
             "A test reached the spend ledger (a billable provider call) without "
             "the `ledger` fixture."
         )
+
+
+@pytest.fixture(autouse=True)
+def fresh_limits(monkeypatch: pytest.MonkeyPatch) -> limits.MemoryLimitStore:
+    """Per-test, in-memory limits: no Redis, and no quota carried between tests.
+    A test that wants a different store or clock calls `limits.configure`."""
+    monkeypatch.setattr(settings, "redis_url", None)
+    store = limits.MemoryLimitStore()
+    limits.configure(limits.Limiter(None, store))
+    yield store
+    limits.configure(None)
 
 
 @pytest.fixture(autouse=True)

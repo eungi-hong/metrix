@@ -13,8 +13,11 @@ as everything else. The job's id is returned so the caller can follow it at
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 import sqlalchemy as sa
 from fastapi import APIRouter, HTTPException, Query, Response
@@ -24,7 +27,7 @@ from sqlalchemy.orm import selectinload
 from app.api.deps import CurrentUser, LLMDep, SessionDep
 from app.core.config import settings
 from app.core.context import CallClass
-from app.core.errors import MetrixError, SpendCapReached
+from app.core.errors import MetrixError, RateLimited, SpendCapReached, UpstreamError
 from app.core.logging import get_logger
 from app.core.symbols import is_valid_symbol, normalize_symbol
 from app.models.enums import Direction, IngestStatus, RelevanceTier
@@ -43,10 +46,12 @@ from app.schemas.market import (
     TickerDetailOut,
     TickerOut,
 )
-from app.services import demand, ingestion, queue, spend
+from app.services import demand, ingestion, queue, quotas, spend
 from app.services.auth import Principal
+from app.services.limits import LimitResult
 from app.services.llm import LLMProvider
 from app.services.movements import sigma_multiple
+from app.services.quotas import Quota
 
 logger = get_logger(__name__)
 router = APIRouter(tags=["tickers"])
@@ -201,6 +206,67 @@ _SPEND_CAP_WARNING = (
     "Today's spend cap is reached: queued news searches will run after 00:00 UTC. "
     "Stored data is shown."
 )
+_NO_WAIT_ON_PLAN = (
+    "wait=true is not available on the {plan} plan, so the work was queued instead."
+)
+# Retry-After for a wait=true request turned away because the API's inline
+# slots are all busy: inline runs take tens of seconds, so a few is enough.
+INLINE_BUSY_RETRY_SECONDS = 5.0
+
+_inline_slots: tuple[int, asyncio.Semaphore] | None = None
+
+
+def _inline_semaphore() -> asyncio.Semaphore:
+    """The process's slots for inline work, sized by API_MAX_INLINE_INGESTIONS."""
+    global _inline_slots
+    size = settings.api_max_inline_ingestions
+    if _inline_slots is None or _inline_slots[0] != size:
+        _inline_slots = (size, asyncio.Semaphore(size))
+    return _inline_slots[1]
+
+
+@asynccontextmanager
+async def _inline_slot() -> AsyncIterator[None]:
+    """Hold one of the API's inline slots, or 429 at once if none is free.
+
+    Refusing rather than queueing for a slot is the point: requests waiting
+    on inline work would tie up the API exactly as running it would.
+    """
+    slots = _inline_semaphore()
+    if slots.locked():
+        now = datetime.now(timezone.utc)
+        busy = LimitResult(
+            allowed=False,
+            limit=settings.api_max_inline_ingestions,
+            remaining=0,
+            reset_at=now + timedelta(seconds=INLINE_BUSY_RETRY_SECONDS),
+            retry_after=INLINE_BUSY_RETRY_SECONDS,
+        )
+        raise RateLimited(
+            "inline_ingestions",
+            busy,
+            "Every slot for wait=true work is busy. Retry shortly, or omit wait=true "
+            "to have the work queued.",
+        )
+    async with slots:
+        yield
+
+
+async def _charge(principal: Principal, quota: Quota, *, has_data: bool) -> str | None:
+    """Charge `quota` for new work. None if charged.
+
+    Refused, it raises `RateLimited` (429) when there is nothing stored to
+    show, or when the caller explicitly asked for a refresh. Otherwise, for a
+    stale ticker or news still owed, it returns a warning and the caller
+    serves what is stored: the data is still worth more than a 429.
+    """
+    try:
+        await quotas.charge(principal, quota)
+    except RateLimited as exc:
+        if has_data and quota == Quota.COLD_INGESTS_PER_DAY:
+            return f"Showing stored data; nothing new was fetched: {exc}"
+        raise
+    return None
 
 
 async def _ensure_data(
@@ -213,11 +279,23 @@ async def _ensure_data(
     refresh: bool,
     wait: bool,
 ) -> _Ensured:
-    """Fetch-if-missing / fetch-if-stale. Returns the state to report."""
+    """Fetch-if-missing / fetch-if-stale. Returns the state to report.
+
+    New work is charged to the caller's quota: `refresh_per_day` for an
+    explicit refresh of stored data, `cold_ingests_per_day` otherwise. A
+    request that joins work already queued is not charged.
+    """
     has_data = ticker is not None and ticker.last_ingested_at is not None
     busy: IngestState = "refreshing" if has_data else "ingesting"
+    warnings: list[str] = []
+    if wait and not quotas.limits_for(principal).allow_wait:
+        wait = False
+        warnings.append(_NO_WAIT_ON_PLAN.format(plan=principal.plan.value))
+
     if ticker is not None and not refresh and not ingestion.is_stale(ticker):
-        return await _enrich_what_is_owed(session, ticker, llm, principal, wait=wait)
+        ensured = await _enrich_what_is_owed(session, ticker, llm, principal, wait=wait)
+        ensured.warnings[:0] = warnings
+        return ensured
 
     # Report a recent failure instead of silently retrying it on every request.
     # Without this a permanently broken symbol (delisted, or a news key that is
@@ -225,34 +303,53 @@ async def _ensure_data(
     # whole pipeline each time it is asked. `refresh=true` forces a retry.
     if ticker is not None and not refresh and ingestion.failed_recently(ticker):
         return _Ensured(
-            "failed", ticker.ingest_error or "The last ingestion for this ticker failed."
+            "failed",
+            ticker.ingest_error or "The last ingestion for this ticker failed.",
+            warnings=warnings,
         )
 
     if ticker is not None and ticker.ingest_status == IngestStatus.RUNNING and not wait:
         job = await queue.active_job(session, queue.ingest_key(symbol))
         if job is None:
-            return _Ensured(busy, _ALREADY_RUNNING)
+            return _Ensured(busy, _ALREADY_RUNNING, warnings=warnings)
         # Handed its id, so allowed to follow it.
         await queue.add_requester(session, job.id, principal.key)
         await session.commit()
-        return _Ensured(busy, _ALREADY_RUNNING, job.id)
+        return _Ensured(busy, _ALREADY_RUNNING, job.id, warnings=warnings)
 
     target = ticker or await ingestion.get_or_create_ticker(session, symbol)
+    quota = Quota.REFRESH_PER_DAY if refresh and has_data else Quota.COLD_INGESTS_PER_DAY
 
     if wait:
-        if not await ingestion.claim_ingestion(session, target):
-            return _Ensured(busy, _ALREADY_RUNNING)
+        async with _inline_slot():
+            if (refused := await _charge(principal, quota, has_data=has_data)) is not None:
+                return _Ensured("ready", warnings=[*warnings, refused])
+            if not await ingestion.claim_ingestion(session, target):
+                await quotas.refund(principal, quota)
+                return _Ensured(busy, _ALREADY_RUNNING, warnings=warnings)
+            try:
+                result = await ingestion.ingest_ticker(
+                    session, symbol, llm=llm, retry_exhausted=refresh
+                )
+            except UpstreamError:
+                await quotas.refund(principal, quota)  # our outage, not their request
+                raise
         # A spend-capped run still stores the prices and returns normally;
-        # its warnings say which news was not fetched.
-        result = await ingestion.ingest_ticker(
-            session, symbol, llm=llm, retry_exhausted=refresh
-        )
-        return _Ensured("ready", warnings=result.warnings)
+        # its warnings say which news was not fetched, and the quota is returned.
+        if result.spend_capped is not None:
+            await quotas.refund(principal, quota)
+        return _Ensured("ready", warnings=[*warnings, *result.warnings])
 
     # The worker takes the ticker claim when it runs the job, not here: a job
     # can sit in the queue longer than a claim stays valid. If this ticker is
-    # already queued, `enqueue` returns that job and pulls it to the front.
-    job = await queue.enqueue(
+    # already queued, `enqueue` returns that job and pulls it to the front,
+    # and joining it is free.
+    charged = False
+    if await queue.active_job(session, queue.ingest_key(symbol)) is None:
+        if (refused := await _charge(principal, quota, has_data=has_data)) is not None:
+            return _Ensured("ready", warnings=[*warnings, refused])
+        charged = True
+    job, created = await queue.enqueue_checked(
         session,
         JobKind.INGEST_TICKER,
         {"symbol": symbol, "retry_exhausted": refresh},
@@ -263,6 +360,8 @@ async def _ensure_data(
         requested_by=principal.key,
     )
     await session.commit()
+    if charged and not created:  # another request queued it a moment ago
+        await quotas.refund(principal, quota)
 
     if has_data:
         return _Ensured(
@@ -270,6 +369,7 @@ async def _ensure_data(
             "Showing stored data; a refresh is queued. Follow it at "
             f"GET /jobs/{job.id}.",
             job.id,
+            warnings=warnings,
         )
     return _Ensured(
         "ingesting",
@@ -277,6 +377,7 @@ async def _ensure_data(
         f"/jobs/{job.id}, or repeat the request with `?wait=true` to block "
         "until it finishes.",
         job.id,
+        warnings=warnings,
     )
 
 
@@ -295,26 +396,43 @@ async def _enrich_what_is_owed(
     someone asks. This is that someone: their enrichment is enqueued at
     interactive priority. A nightly job already queued for a movement shares
     its dedupe key, so it is pulled to the front rather than duplicated.
+
+    It is real news and LLM work, so a request that starts any of it is
+    charged one `cold_ingests_per_day`, however many movements it covers. One
+    that only pulls already-queued jobs forward is free.
     """
     owed = await ingestion.enrichable_movements(
         session, ticker, limit=settings.max_movements_per_ingest
     )
     if not owed:
         return _Ensured("ready")
+    quota = Quota.COLD_INGESTS_PER_DAY
 
     if wait:
-        warnings: list[str] = []
-        for movement in owed:
-            try:
-                await ingestion.enrich_movement(session, movement.id, llm=llm)
-            except MetrixError as exc:
-                warnings.append(f"{movement.date}: {exc}")
-            except SpendCapReached as exc:
-                # Serve what is stored; the remaining movements stay as they were.
-                await session.rollback()
-                warnings.append(f"News not fetched: {exc}")
-                break
+        async with _inline_slot():
+            if (refused := await _charge(principal, quota, has_data=True)) is not None:
+                return _Ensured("ready", warnings=[refused])
+            warnings: list[str] = []
+            for movement in owed:
+                try:
+                    await ingestion.enrich_movement(session, movement.id, llm=llm)
+                except MetrixError as exc:
+                    warnings.append(f"{movement.date}: {exc}")
+                except SpendCapReached as exc:
+                    # Serve what is stored; the remaining movements stay as they were.
+                    await session.rollback()
+                    await quotas.refund(principal, quota)
+                    warnings.append(f"News not fetched: {exc}")
+                    break
         return _Ensured("ready", warnings=warnings)
+
+    starts_work = False
+    for movement in owed:
+        if await queue.active_job(session, queue.enrich_key(movement.id)) is None:
+            starts_work = True
+            break
+    if starts_work and (refused := await _charge(principal, quota, has_data=True)) is not None:
+        return _Ensured("ready", warnings=[refused])
 
     jobs = [
         await queue.enqueue(

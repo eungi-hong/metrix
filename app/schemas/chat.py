@@ -73,6 +73,7 @@ class ErrorOut(BaseModel):
         "internal_error",
         "spend_cap_reached",
         "unauthorized",
+        "rate_limited",
     ]
     detail: str
 

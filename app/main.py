@@ -11,6 +11,7 @@ from app.api.middleware import InteractiveAttributionMiddleware
 from app.api.routes import admin, chat, conversations, health, jobs, tickers
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
+from app.core.redis import close_redis
 from app.db.session import dispose_engine
 from app.services import spend
 
@@ -41,6 +42,7 @@ async def lifespan(app: FastAPI):
     )
     spend.warn_on_startup()
     yield
+    await close_redis()
     await dispose_engine()
 
 

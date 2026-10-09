@@ -18,6 +18,21 @@ services:
       timeout: 3s
       retries: 15
 
+  redis:
+    image: redis:7-alpine
+    # Limits only: per-user quotas and provider rate limits. Nothing durable
+    # lives here (the queue and the spend ledger are in Postgres), so no
+    # persistence, and a size cap with eviction instead of failing writes.
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "volatile-ttl"]
+    ports:
+      # 6380 on the host, like Postgres on 5433, to stay clear of a local Redis.
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
   api:
     build: .
     # Keys and tuning come from .env; DATABASE_URL below wins over the one in
@@ -26,11 +41,16 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://metrix:metrix@db:5432/metrix
+      REDIS_URL: redis://redis:6379/0
     ports:
       - "8000:8000"
     depends_on:
       db:
         condition: service_healthy
+      # Started first, but the API runs without it: limits fall back to
+      # per-process counters while Redis is unreachable.
+      redis:
+        condition: service_started
     healthcheck:
       # The worker waits for this, which also means it waits for migrations:
       # the API container applies them before it starts serving.
@@ -46,6 +66,7 @@ services:
       - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://metrix:metrix@db:5432/metrix
+      REDIS_URL: redis://redis:6379/0
       # The API container migrates; two containers racing `alembic upgrade`
       # would fail one of them.
       SKIP_MIGRATIONS: "1"

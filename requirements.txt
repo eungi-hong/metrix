@@ -10,6 +10,9 @@ asyncpg==0.30.0
 alembic==1.14.0
 greenlet==3.1.1
 
+# --- limits: per-user quotas, shared provider rate limits ---
+redis==5.2.1
+
 # --- external data ---
 yfinance>=1.7.0,<2.0.0
 pandas==2.2.3

@@ -12,7 +12,9 @@ retrying only spends quota; a timeout or a 503 may well succeed next time.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
+from typing import Any
 
 
 class MetrixError(Exception):
@@ -86,3 +88,21 @@ class SpendCapReached(Exception):
         self.call_class = call_class
         self.retry_at = retry_at
         super().__init__(detail)
+
+
+class RateLimited(Exception):
+    """A caller is over one of their quotas. 429, with Retry-After and the
+    X-RateLimit-* headers from `result` (a `limits.LimitResult`).
+
+    Not a `MetrixError`, for the same reason as `SpendCapReached`: it must
+    reach the HTTP layer, not be absorbed by a degrade-gracefully handler.
+    """
+
+    def __init__(self, quota: str, result: Any, detail: str | None = None) -> None:
+        self.quota = quota
+        self.result = result
+        super().__init__(
+            detail
+            or f"Over the {quota} quota ({result.limit}); retry in "
+            f"{math.ceil(result.retry_after)} s."
+        )

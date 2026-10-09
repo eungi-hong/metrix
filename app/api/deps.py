@@ -5,7 +5,9 @@ substitute a stub through `app.dependency_overrides` without patching.
 
 `CurrentUser` is the one place a request's identity is decided. Today that is
 an API key; a move to JWT or OAuth would change this function and nothing
-that depends on it.
+that depends on it. It also charges the caller's `requests_per_minute`, so
+every authenticated call counts, and puts that quota's X-RateLimit-* headers
+on the response.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from __future__ import annotations
 import secrets
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, Request
+from fastapi import Depends, Header, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,7 +23,7 @@ from app.core.config import settings
 from app.core.context import current_user_id
 from app.core.errors import ConfigurationError
 from app.db.session import get_session
-from app.services import auth
+from app.services import auth, quotas
 from app.services.auth import Principal
 from app.services.llm import LLMProvider, get_llm_client
 
@@ -35,6 +37,7 @@ _bearer = HTTPBearer(auto_error=False, description="An API key: mtx_...")
 
 async def current_principal(
     request: Request,
+    response: Response,
     session: SessionDep,
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)],
 ) -> Principal:
@@ -54,6 +57,8 @@ async def current_principal(
     else:
         principal = await auth.authenticate(session, credentials.credentials, ip)
     current_user_id.set(principal.user_id)
+    allowed = await quotas.charge(principal, quotas.Quota.REQUESTS_PER_MINUTE)
+    response.headers.update(allowed.headers())
     return principal
 
 

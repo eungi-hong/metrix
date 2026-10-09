@@ -142,3 +142,75 @@ in `job_requesters`. A column on the job would not do: deduplication folds a sec
 user's request into the first user's job and hands both of them its id. The job's own
 `user_id` is the user whose request created it, and the worker attributes its spend
 to them. Nightly jobs serve no request and are admin-only.
+
+## Quotas
+
+Identity makes per-caller limits possible; quotas are those limits. Each plan
+(`anonymous`, `free`, `pro`, `internal`, from `PLAN_LIMITS_JSON`) sets
+`requests_per_minute` for every authenticated call, `chat_per_minute` and
+`chat_per_day` for chat turns, `cold_ingests_per_day` for requests that start new
+ingestion or news work, `refresh_per_day` for `refresh=true` requests that start work,
+and `allow_wait`. Every count is per principal: a user, or an anonymous caller's IP.
+
+### Why Redis for limits, and Postgres for spend and the queue
+
+Redis comes in for exactly the counters that are hot, short-lived and approximate. A
+quota is checked on every request, and its state matters for a minute or a day. In
+Postgres that would be a write on every request, against rows every request of a busy
+user contends on. In Redis it is one round trip to a script that runs atomically.
+
+Money is the opposite case. Spend has to be durable and auditable, so the ledger and
+the cap stay in Postgres, and the cap must hold when Redis is down; it does, because
+Redis is never consulted for it. The queue stays in Postgres too: a job commits in
+the same transaction as the data that made it necessary, which Redis cannot offer.
+
+### The algorithms
+
+Per-minute limits use GCRA, the generic cell rate algorithm. It keeps one number per
+key, the time at which the key would be fully rested, and moves it forward by
+`period / limit` per request; a request that would push it more than one period ahead
+is refused. That gives a burst of up to `limit`, then exactly the sustained rate. A
+sliding-window log would store a timestamp per request and trim and count them on
+every check; GCRA is one key and one number in constant memory, one atomic Lua script,
+and it knows exactly when the next request will fit, so `Retry-After` is exact. The
+script reads the time from Redis, so processes whose clocks disagree still agree on
+the limit.
+
+Daily quotas are a counter on a key named for the UTC date, expiring an hour after
+midnight, checked and incremented in one script so a refused request costs nothing.
+
+### Charging and refunding
+
+A quota is charged before the work, so concurrent requests cannot all slip past it,
+and given back if the work then fails for a reason that is ours. A chat turn whose
+model call fails, or which the spend cap refuses, is refunded; a user should not lose
+quota to our outage. A turn the caller got wrong, such as an id for someone else's
+conversation, keeps its charge, so quota cannot be spent probing for free.
+
+Cold ingests are charged only when new work actually starts. A request that joins an
+ingestion already queued (by anyone) costs nothing, and if two requests race to queue
+the same ticker, the one whose job turns out to exist already is refunded. Fetching
+news still owed on an otherwise warm ticker is real Exa and LLM work, so a request that
+starts any of it costs one cold ingest, however many movements it covers. A warm
+ticker with nothing owed never counts. Out of cold ingests, a ticker with stored data is
+served from storage with a warning; one with nothing stored gets the 429. An explicit
+`refresh=true` past `refresh_per_day` is always a 429, because the caller asked for
+exactly that work. A queued job that later fails in the worker is not refunded: it is
+retried, and its work is usually done in the end.
+
+`wait=true` runs work inside the API process, bypassing the queue. It is allowed only
+on plans with `allow_wait`; elsewhere the request is queued instead, with a warning,
+rather than refused, so a client that always sends it still works. Where it is
+allowed, a process-wide semaphore of `API_MAX_INLINE_INGESTIONS` bounds how many run
+at once, and a request that finds every slot busy gets 429 at once rather than
+waiting, since waiting would tie up the API exactly as running would.
+
+### When Redis is down
+
+Per-user limits fail open, but stay bounded. On a Redis error the limiter logs
+`limiter_fallback` (at most once a minute) and uses a per-process in-memory store for
+`REDIS_RETRY_SECONDS`, then tries Redis again, so an outage costs one short timeout
+rather than one per request. Each process then enforces each limit on its own, so a
+caller can get up to (processes x limit) for the length of the outage. Taking the API
+down because a limiter is unavailable would be worse, and the spend cap, in Postgres,
+still holds. `/health` reports `"redis": "unreachable"` and status `degraded`.
