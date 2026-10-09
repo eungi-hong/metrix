@@ -16,6 +16,7 @@ from app.models.enums import (
 )
 from app.models.jobs import Job, JobKind, JobSource, JobStatus, PrewarmRun
 from app.models.market import Movement, PriceBar, Ticker
+from app.models.usage import SpendDaily, UsageEvent
 from app.models.news import (
     MovementNewsLink,
     NewsArticle,
@@ -43,8 +44,10 @@ __all__ = [
     "PrewarmRun",
     "PriceBar",
     "RelevanceTier",
+    "SpendDaily",
     "Ticker",
     "TickerDemand",
+    "UsageEvent",
     "normalize_url",
     "url_fingerprint",
 ]

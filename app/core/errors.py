@@ -12,6 +12,8 @@ retrying only spends quota; a timeout or a 503 may well succeed next time.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 
 class MetrixError(Exception):
     """Base class for everything this application raises on purpose."""
@@ -59,3 +61,22 @@ class ConfigurationError(MetrixError):
     """A required API key or setting is missing."""
 
     permanent = True
+
+
+class SpendCapReached(Exception):
+    """A billable call was refused: today's spend cap, or background's share of it.
+
+    Deliberately not a `MetrixError`. The pipeline catches `MetrixError` to
+    degrade gracefully, recording a failed search or scoring pass against the
+    movement and moving on. A cap is not a failure of the work, and recording
+    it as one would use up the movement's attempts and mark it FAILED. So this
+    propagates past those handlers to the boundary, where each caller does the
+    right thing with it: the worker holds the job until `retry_at` without
+    using an attempt, the tickers route serves stored data with a warning, and
+    chat answers 503 with `Retry-After`.
+    """
+
+    def __init__(self, call_class: str, retry_at: datetime, detail: str) -> None:
+        self.call_class = call_class
+        self.retry_at = retry_at
+        super().__init__(detail)

@@ -106,6 +106,9 @@ class Job(Base):
     # Set at claim and refreshed by the worker's heartbeat while it runs.
     locked_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     last_error: Mapped[str | None] = mapped_column(sa.Text)
+    # Why a queued job is being held rather than retried: "spend_cap" while it
+    # waits for tomorrow's budget. Cleared when the job is claimed.
+    hold_reason: Mapped[str | None] = mapped_column(sa.String(32))
 
     source: Mapped[JobSource] = mapped_column(sa_enum(JobSource, "job_source"), nullable=False)
     progress: Mapped[dict[str, Any] | None] = mapped_column(JSONType)

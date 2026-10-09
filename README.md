@@ -11,6 +11,7 @@ GET  /jobs/{id}          status, progress and errors of a queued background job
 GET  /health             liveness and which integrations are configured
 POST /admin/prewarm      start a pre-warm run now          (X-Admin-Token)
 GET  /admin/queue        queue health and the last run     (X-Admin-Token)
+GET  /admin/usage        the day's spend, by provider, operation and user  (X-Admin-Token)
 ```
 
 ---
@@ -176,6 +177,26 @@ the latest dead jobs with their errors, and the last run's numbers (universe siz
 movements found, enrichments queued, used and deferred). Both admin endpoints answer
 `503` until `ADMIN_TOKEN` is set. The design, and why it is built this way, is in
 [docs/PREWARMING.md](docs/PREWARMING.md).
+
+### Spend
+
+Every Exa search and LLM call is recorded in Postgres with its cost, and counted
+against `DAILY_SPEND_CAP_USD` (per UTC day; required when `APP_ENV=prod`). Background
+work, the nightly run included, may use at most `BACKGROUND_SPEND_SHARE` of the cap, so
+the rest stays available to users. Set `LLM_PRICES_JSON` from your provider's pricing
+page: it ships commented out, and until it is set LLM calls are priced at a
+deliberately pessimistic fallback and flagged as estimates.
+
+Once the cap is reached, chat answers `503` with `Retry-After` until midnight UTC,
+`GET /tickers` keeps serving stored data with a warning, and queued jobs wait for the
+reset instead of failing. See where the money went with:
+
+```bash
+curl -H "X-Admin-Token: $ADMIN_TOKEN" "http://localhost:8000/admin/usage?date=2026-10-09"
+```
+
+How the cap is enforced, and why it cannot be overshot by concurrent calls, is in
+[docs/FAIRNESS.md](docs/FAIRNESS.md).
 
 ### Chat
 
@@ -432,6 +453,7 @@ app/
     prewarm.py    the nightly run: fan-out, price chunks, priorities, the budget
     schedule.py   when it runs: 17:15 New York, weekdays, DST-correct
     ratelimit.py  per-provider token buckets for Exa, Anthropic and yfinance
+    spend.py      the spend ledger and the daily cap: reserve, settle, refuse
     job_handlers.py  what each kind of queued job does
     chat.py       retrieval, prompt assembly, citation labels
     llm/          provider abstraction, Anthropic adapter, uniform error mapping
@@ -502,6 +524,8 @@ calls. What keeps it bounded:
 - **Peers are cached** for 30 days — one call per ticker, not per movement.
 - Exa calls retry with exponential backoff on 429/5xx only; a 4xx is not retried,
   because retrying a malformed request just burns quota.
+- **A daily spend cap** with a share reserved for users, enforced before every billable
+  call; see [Spend](#spend).
 
 ### Concurrency
 
@@ -556,6 +580,10 @@ No Docker, no network, no API keys.
   budget deferred.
 - `tests/test_schedule.py` — the 17:15 schedule across both DST changes and weekends.
 - `tests/test_ratelimit.py` — the token buckets on a fake clock, and backing off on 429.
+- `tests/test_spend.py` — prices and estimates, reserve and settle, the cap and the
+  background share, metering at both seams, how a refusal is held in the worker and
+  served in the API, attribution, and `/admin/usage`. `tests/test_postgres.py` races
+  forty reservations for one cap on real Postgres.
 - `tests/test_show_cli.py` — the renderer's citation parsing, colour gating, and
   sparkline edge cases.
 

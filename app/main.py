@@ -7,10 +7,12 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.api.errors import register_exception_handlers
+from app.api.middleware import InteractiveAttributionMiddleware
 from app.api.routes import admin, chat, health, jobs, tickers
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
 from app.db.session import dispose_engine
+from app.services import spend
 
 logger = get_logger(__name__)
 
@@ -37,6 +39,7 @@ async def lifespan(app: FastAPI):
         llm_provider=settings.llm_provider,
         model=settings.llm_model,
     )
+    spend.warn_on_startup()
     yield
     await dispose_engine()
 
@@ -48,6 +51,7 @@ def create_app() -> FastAPI:
         version="1.0.0",
         lifespan=lifespan,
     )
+    app.add_middleware(InteractiveAttributionMiddleware)
     register_exception_handlers(app)
     app.include_router(health.router)
     app.include_router(tickers.router)

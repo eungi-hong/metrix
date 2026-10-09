@@ -96,7 +96,7 @@ async def answer_question(
         {"role": "user", "content": _render_prompt(request.question, context)}
     ]
 
-    answer = await llm.complete(system=_SYSTEM, messages=messages)
+    answer = await llm.complete(system=_SYSTEM, messages=messages, operation="chat")
     sources = _build_sources(context)
 
     session.add(

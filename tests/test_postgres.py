@@ -114,3 +114,33 @@ async def test_status_changes_are_notified_on_commit(pg):
         assert await asyncio.wait_for(received.get(), timeout=5) == str(job.id)
     finally:
         await listener.close()
+
+
+async def test_concurrent_spend_reservations_never_overshoot_the_cap(pg, monkeypatch):
+    """Forty reservations race for a $1.00 cap at $0.07 each: exactly 14 fit.
+    A read-then-write check would let most of them through."""
+    from decimal import Decimal
+
+    from app.core.config import settings
+    from app.core.context import CallClass, attributed
+    from app.core.errors import SpendCapReached
+    from app.models.usage import SpendDaily
+    from app.services import spend
+
+    monkeypatch.setattr(spend, "_session_factory", pg)
+    monkeypatch.setattr(settings, "daily_spend_cap_usd", 1.00)
+
+    async def attempt() -> bool:
+        with attributed(call_class=CallClass.INTERACTIVE):
+            try:
+                await spend.reserve("exa", "search", Decimal("0.07"))
+            except SpendCapReached:
+                return False
+        return True
+
+    granted = await asyncio.gather(*(attempt() for _ in range(40)))
+
+    assert sum(granted) == 14
+    async with pg() as session:
+        (row,) = (await session.scalars(sa.select(SpendDaily))).all()
+        assert row.reserved_usd == Decimal("0.98")

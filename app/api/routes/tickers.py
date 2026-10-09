@@ -23,7 +23,8 @@ from sqlalchemy.orm import selectinload
 
 from app.api.deps import LLMDep, SessionDep
 from app.core.config import settings
-from app.core.errors import MetrixError
+from app.core.context import CallClass
+from app.core.errors import MetrixError, SpendCapReached
 from app.core.logging import get_logger
 from app.core.symbols import is_valid_symbol, normalize_symbol
 from app.models.enums import Direction, IngestStatus, RelevanceTier
@@ -42,7 +43,7 @@ from app.schemas.market import (
     TickerDetailOut,
     TickerOut,
 )
-from app.services import demand, ingestion, queue
+from app.services import demand, ingestion, queue, spend
 from app.services.llm import LLMProvider
 from app.services.movements import sigma_multiple
 
@@ -107,6 +108,8 @@ async def get_ticker_detail(
     ticker = await ingestion.get_ticker(session, symbol)
     ensured = await _ensure_data(session, ticker, symbol, llm, refresh=refresh, wait=wait)
     state = ensured.state
+    if ensured.job_id is not None and await spend.refused_today(session, CallClass.INTERACTIVE):
+        ensured.warnings.append(_SPEND_CAP_WARNING)
 
     ticker = await ingestion.get_ticker(session, symbol)
     if ticker is None:
@@ -190,6 +193,10 @@ class _Ensured:
 
 
 _ALREADY_RUNNING = "An ingestion is already running for this ticker."
+_SPEND_CAP_WARNING = (
+    "Today's spend cap is reached: queued news searches will run after 00:00 UTC. "
+    "Stored data is shown."
+)
 
 
 async def _ensure_data(
@@ -225,6 +232,8 @@ async def _ensure_data(
     if wait:
         if not await ingestion.claim_ingestion(session, target):
             return _Ensured(busy, _ALREADY_RUNNING)
+        # A spend-capped run still stores the prices and returns normally;
+        # its warnings say which news was not fetched.
         result = await ingestion.ingest_ticker(
             session, symbol, llm=llm, retry_exhausted=refresh
         )
@@ -283,6 +292,11 @@ async def _enrich_what_is_owed(
                 await ingestion.enrich_movement(session, movement.id, llm=llm)
             except MetrixError as exc:
                 warnings.append(f"{movement.date}: {exc}")
+            except SpendCapReached as exc:
+                # Serve what is stored; the remaining movements stay as they were.
+                await session.rollback()
+                warnings.append(f"News not fetched: {exc}")
+                break
         return _Ensured("ready", warnings=warnings)
 
     jobs = [

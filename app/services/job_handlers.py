@@ -72,7 +72,7 @@ async def handle_ingest_ticker(session: AsyncSession, job: Job, ctx: JobContext)
         return
 
     try:
-        await ingestion.ingest_ticker(
+        result = await ingestion.ingest_ticker(
             session,
             symbol,
             llm=ctx.llm,
@@ -83,6 +83,9 @@ async def handle_ingest_ticker(session: AsyncSession, job: Job, ctx: JobContext)
         await session.rollback()
         await ingestion.mark_ingestion_failed(session, symbol, exc)
         raise
+    if result.spend_capped is not None:
+        # The prices are in; the rest of the news waits for the cap to reset.
+        raise result.spend_capped
 
 
 async def handle_enrich_movement(session: AsyncSession, job: Job, ctx: JobContext) -> None:

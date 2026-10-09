@@ -8,6 +8,10 @@ all this application needs:
   has to regex JSON out of prose.
 * `complete` -- a plain multi-turn completion, used by the chat endpoint.
 
+Both take `operation`, what the call is for ("relevance", "peers", "chat"),
+which the spend ledger records. It is required, so a new call site cannot
+leave its cost unattributed.
+
 Anything vendor-specific -- SDK types, error classes, request shapes -- lives
 behind an implementation of this class, the same way `news/base.py` keeps Exa
 out of the ingestion code.
@@ -54,6 +58,7 @@ class LLMProvider(ABC):
         system: str,
         user: str,
         output_model: type[T],
+        operation: str,
         max_tokens: int | None = None,
     ) -> T:
         """Return a validated `output_model` instance."""
@@ -64,6 +69,7 @@ class LLMProvider(ABC):
         *,
         system: str,
         messages: list[MessageParam],
+        operation: str,
         max_tokens: int | None = None,
     ) -> str:
         """Return the assistant's reply as plain text."""

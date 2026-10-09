@@ -234,6 +234,7 @@ async def score_candidates(
         system=request.system,
         user=request.user,
         output_model=request.output_model,
+        operation="relevance",
         max_tokens=request.max_tokens,
     )
     return apply_scoring_result(request, report, scored_by=llm.model, min_score=min_score)

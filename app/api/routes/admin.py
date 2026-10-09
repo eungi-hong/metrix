@@ -1,4 +1,4 @@
-"""Operator endpoints: trigger a pre-warm, inspect the queue.
+"""Operator endpoints: trigger a pre-warm, inspect the queue and the day's spend.
 
 Guarded by a shared token in the `X-Admin-Token` header. While `ADMIN_TOKEN`
 is unset they answer 503 and say so, rather than being open by default.
@@ -8,7 +8,7 @@ Anything finer-grained (accounts, roles) is out of scope.
 from __future__ import annotations
 
 import secrets
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Annotated
 
 import sqlalchemy as sa
@@ -17,17 +17,23 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from app.api.deps import SessionDep
 from app.core.config import settings
 from app.core.errors import ConfigurationError
+from app.core.context import CallClass
 from app.models.jobs import Job, JobKind, JobSource, JobStatus, PrewarmRun
+from app.models.usage import UsageEvent
 from app.schemas.admin import (
     DeadJob,
     JobCount,
     PrewarmRunOut,
     PrewarmTriggered,
     QueueSummary,
+    SpendByOperation,
+    SpendByUser,
+    UsageSummary,
 )
-from app.services import prewarm, queue, schedule
+from app.services import prewarm, queue, schedule, spend
 
 DEAD_JOBS_SHOWN = 20
+TOP_USERS_SHOWN = 10
 
 
 def require_admin(x_admin_token: Annotated[str | None, Header()] = None) -> None:
@@ -104,13 +110,95 @@ async def queue_summary(session: SessionDep) -> QueueSummary:
     run = await session.scalar(
         sa.select(PrewarmRun).order_by(PrewarmRun.started_at.desc(), PrewarmRun.id.desc()).limit(1)
     )
+    held = await session.scalar(
+        sa.select(sa.func.count())
+        .select_from(Job)
+        .where(Job.status == JobStatus.QUEUED, Job.hold_reason == queue.HOLD_SPEND_CAP)
+    )
     return QueueSummary(
+        held_by_spend_cap=held or 0,
         counts=counts,
         oldest_queued_age_seconds=(
             round((now - _as_utc(oldest_due)).total_seconds(), 1) if oldest_due else None
         ),
         dead=[DeadJob.model_validate(job) for job in dead],
         last_run=_run_out(run) if run else None,
+    )
+
+
+@router.get("/usage", response_model=UsageSummary, summary="Where the money went on one day")
+async def usage_summary(
+    session: SessionDep,
+    day: date | None = Query(
+        None, alias="date", description="UTC date. Defaults to today."
+    ),
+) -> UsageSummary:
+    day = day or spend.utc_day(datetime.now(timezone.utc))
+    start = datetime.combine(day, time.min, tzinfo=timezone.utc)
+    on_day = [UsageEvent.created_at >= start, UsageEvent.created_at < start + timedelta(days=1)]
+
+    by_operation = [
+        SpendByOperation(
+            provider=provider,
+            operation=operation,
+            calls=calls,
+            cost_usd=spend.usd(cost or 0),
+            estimated_calls=estimated or 0,
+        )
+        for provider, operation, calls, cost, estimated in (
+            await session.execute(
+                sa.select(
+                    UsageEvent.provider,
+                    UsageEvent.operation,
+                    sa.func.count(),
+                    sa.func.sum(UsageEvent.cost_usd),
+                    sa.func.sum(sa.case((UsageEvent.cost_estimated, 1), else_=0)),
+                )
+                .where(*on_day)
+                .group_by(UsageEvent.provider, UsageEvent.operation)
+                .order_by(sa.func.sum(UsageEvent.cost_usd).desc())
+            )
+        ).all()
+    ]
+    by_class = dict(
+        (
+            await session.execute(
+                sa.select(UsageEvent.call_class, sa.func.sum(UsageEvent.cost_usd))
+                .where(*on_day)
+                .group_by(UsageEvent.call_class)
+            )
+        ).all()
+    )
+    top_users = [
+        SpendByUser(user_id=user_id, calls=calls, cost_usd=spend.usd(cost or 0))
+        for user_id, calls, cost in (
+            await session.execute(
+                sa.select(UsageEvent.user_id, sa.func.count(), sa.func.sum(UsageEvent.cost_usd))
+                .where(*on_day, UsageEvent.user_id.is_not(None))
+                .group_by(UsageEvent.user_id)
+                .order_by(sa.func.sum(UsageEvent.cost_usd).desc())
+                .limit(TOP_USERS_SHOWN)
+            )
+        ).all()
+    ]
+    current = await spend.status(session, day)
+    background = spend.usd(by_class.get(CallClass.BACKGROUND) or 0)
+    interactive = spend.usd(by_class.get(CallClass.INTERACTIVE) or 0)
+    return UsageSummary(
+        date=day,
+        total_usd=background + interactive,
+        background_usd=background,
+        interactive_usd=interactive,
+        calls=sum(row.calls for row in by_operation),
+        by_operation=by_operation,
+        top_users=top_users,
+        cap_usd=current.cap_usd,
+        background_cap_usd=current.background_cap_usd,
+        reserved_usd=current.reserved_usd,
+        headroom_usd=current.headroom_usd,
+        background_headroom_usd=current.background_headroom_usd,
+        interactive_capped=current.interactive_capped,
+        background_capped=current.background_capped,
     )
 
 

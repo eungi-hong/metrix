@@ -30,7 +30,7 @@ from app.db.session import get_session
 from app.main import create_app
 from app.models.jobs import Job
 from app.services import prices as price_service
-from app.services import ratelimit
+from app.services import ratelimit, spend
 from app.services.llm import LLMProvider, get_llm_client
 from app.services.peers import PeerSet
 from app.services.prices import PriceBarData, PriceHistory, TickerProfile
@@ -190,6 +190,42 @@ def offline(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(price_service, "fetch_price_history", fake_fetch)
 
 
+class _NoLedger:
+    """Stands in for the spend ledger's session factory in every test.
+
+    Without it, a test that reached a billable seam would open the app's real
+    `SessionLocal`, which `.env` may point at a live database. A test that
+    means to exercise metering asks for the `ledger` fixture instead.
+    """
+
+    def __call__(self) -> AsyncSession:
+        raise AssertionError(
+            "A test reached the spend ledger (a billable provider call) without "
+            "the `ledger` fixture."
+        )
+
+
+@pytest.fixture(autouse=True)
+def no_ledger(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(spend, "_session_factory", _NoLedger())
+    monkeypatch.setattr(settings, "daily_spend_cap_usd", None)
+    monkeypatch.setattr(settings, "llm_prices_json", {})
+
+
+@pytest.fixture
+async def ledger(tmp_path, monkeypatch) -> AsyncGenerator[async_sessionmaker[AsyncSession], None]:
+    """Meter billable calls into a SQLite file of their own; read it back here.
+
+    Its own file, not `db` or the in-memory database: the ledger writes from
+    sessions of its own while the caller's transaction is open, and SQLite
+    allows one writer per database, so sharing one would deadlock where
+    Postgres (row locks, other tables) does not.
+    """
+    async with file_session_factory(tmp_path / "ledger.db") as factory:
+        monkeypatch.setattr(spend, "_session_factory", factory)
+        yield factory
+
+
 @asynccontextmanager
 async def sqlite_session_factory() -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     """A fresh in-memory database with every table created."""
@@ -271,8 +307,14 @@ async def db(tmp_path) -> AsyncGenerator[async_sessionmaker[AsyncSession], None]
     For tests where two sessions write concurrently (a worker's keepalive
     beside its handler), which the shared in-memory connection cannot do.
     """
+    async with file_session_factory(tmp_path / "worker.db") as factory:
+        yield factory
+
+
+@asynccontextmanager
+async def file_session_factory(path) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
     engine = create_async_engine(
-        f"sqlite+aiosqlite:///{tmp_path / 'worker.db'}",
+        f"sqlite+aiosqlite:///{path}",
         poolclass=NullPool,
         connect_args={"timeout": 10},  # wait for a lock rather than fail
     )

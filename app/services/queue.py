@@ -24,6 +24,10 @@ Semantics
 * A failed attempt is retried with exponential backoff and jitter until
   `max_attempts`, then the job is DEAD. Errors flagged `permanent` (an unknown
   symbol, a missing or rejected key) skip the retries and go straight to DEAD.
+* A job refused by the spend cap is neither retried nor dead: `hold` puts
+  it back to wait until the cap resets, gives back its attempt, and marks it
+  `hold_reason = "spend_cap"`. Waiting for money is not a failure, and must
+  not walk a job toward DEAD.
 * A worker that dies leaves its jobs RUNNING. `reap_stale` requeues any whose
   lock has not been refreshed within `JOB_LOCK_TIMEOUT_MINUTES`; a live
   worker refreshes its locks with `heartbeat`, so a slow job is not run twice.
@@ -82,6 +86,7 @@ RETRY_JITTER_FRACTION = 0.25
 _SQLITE_CLAIM_ATTEMPTS = 5
 
 NOTIFY_CHANNEL = "job_events"
+HOLD_SPEND_CAP = "spend_cap"
 UNKNOWN_SECTOR = "_unknown"
 
 
@@ -116,6 +121,11 @@ def nightly_key(trading_date: date) -> str:
 
 def prices_key(trading_date: date, chunk: int) -> str:
     return f"prices:{trading_date.isoformat()}:{chunk}"
+
+
+def jittered_after(at: datetime, spread_seconds: float) -> datetime:
+    """`at` plus up to `spread_seconds`: never before it, as when waiting for a reset."""
+    return at + timedelta(seconds=random.uniform(0, spread_seconds))
 
 
 def jittered(at: datetime, *, not_before: datetime | None = None) -> datetime:
@@ -307,6 +317,7 @@ async def claim(
         "locked_by": worker_id,
         "locked_at": now,
         "attempts": Job.attempts + 1,
+        "hold_reason": None,
     }
 
     if _dialect(session) == "postgresql":
@@ -470,6 +481,49 @@ async def release(
     if released:
         logger.info("job_released", job_id=job.id, kind=job.kind.value, dedupe_key=job.dedupe_key)
     return released
+
+
+async def hold(
+    session: AsyncSession,
+    job: Job,
+    *,
+    until: datetime,
+    reason: str,
+    detail: str,
+    now: datetime | None = None,
+) -> bool:
+    """Put a claimed job back to wait until `until`, without using an attempt.
+
+    For a job that could not run for a reason outside it, such as the spend
+    cap. It is not a failure, so unlike `fail` it neither counts toward
+    `max_attempts` nor backs off: it runs again as soon as `until` passes.
+    Commits. False if the lock was lost.
+    """
+    now = now or _now()
+    held = await _transition(
+        session,
+        job,
+        {
+            "status": JobStatus.QUEUED,
+            "run_after": until,
+            "locked_by": None,
+            "locked_at": None,
+            "attempts": Job.attempts - 1,
+            "hold_reason": reason,
+            "last_error": detail[: settings.job_error_max_chars],
+        },
+    )
+    await session.commit()
+    if held:
+        logger.info(
+            "job_held",
+            job_id=job.id,
+            kind=job.kind.value,
+            dedupe_key=job.dedupe_key,
+            reason=reason,
+            until=until.isoformat(),
+        )
+    return held
 
 
 async def heartbeat(

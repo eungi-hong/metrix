@@ -6,6 +6,9 @@ every error response has the same shape (`ErrorOut`).
 
 from __future__ import annotations
 
+import math
+from datetime import datetime, timezone
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -13,6 +16,7 @@ from app.core.errors import (
     ConfigurationError,
     LLMError,
     MetrixError,
+    SpendCapReached,
     TickerNotFoundError,
     UpstreamError,
 )
@@ -57,6 +61,17 @@ def register_exception_handlers(app: FastAPI) -> None:
         logger.warning("upstream_error", provider=exc.provider, detail=str(exc))
         return JSONResponse(
             status_code=502, content=_body("upstream_unavailable", str(exc))
+        )
+
+    @app.exception_handler(SpendCapReached)
+    async def _spend_capped(request: Request, exc: SpendCapReached) -> JSONResponse:
+        # 503 with Retry-After: the service is fine, it has spent today's
+        # budget, and the client is told exactly when to come back.
+        wait = math.ceil((exc.retry_at - datetime.now(timezone.utc)).total_seconds())
+        return JSONResponse(
+            status_code=503,
+            content=_body("spend_cap_reached", str(exc)),
+            headers={"Retry-After": str(max(wait, 1))},
         )
 
     @app.exception_handler(MetrixError)

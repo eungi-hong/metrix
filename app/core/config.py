@@ -6,16 +6,26 @@ about movement detection or cost control is a hardcoded magic number.
 
 from __future__ import annotations
 
+import json
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 # Calendar days convert to trading days at roughly 5 in 7 (ignoring holidays).
 TRADING_DAYS_PER_WEEK = 5
+
+
+class LLMPrice(BaseModel):
+    """One model's prices, in US dollars per million tokens."""
+
+    input_per_mtok: float = Field(ge=0)
+    output_per_mtok: float = Field(ge=0)
+    cache_read_per_mtok: float = Field(ge=0)
+    cache_write_per_mtok: float = Field(ge=0)
 
 
 class Settings(BaseSettings):
@@ -222,6 +232,63 @@ class Settings(BaseSettings):
         default=2.0, gt=0, description="yfinance requests per second, per process."
     )
 
+    # -------------------------------------------------------------- spend
+    # Prices are configuration, never code: they change, and a guessed price
+    # in a cap is worse than none. See .env.example for the shape.
+    llm_prices_json: Annotated[dict[str, LLMPrice], NoDecode] = Field(
+        default_factory=dict,
+        description="JSON map of model id -> {input_per_mtok, output_per_mtok, "
+        "cache_read_per_mtok, cache_write_per_mtok}, in USD per million tokens. "
+        "Calls to a model missing here are recorded at the fallback rate below "
+        "and flagged cost_estimated.",
+    )
+    llm_fallback_input_per_mtok: float = Field(
+        default=20.0,
+        ge=0,
+        description="Rate for input (and cache) tokens of a model with no entry in "
+        "LLM_PRICES_JSON. Not a price: a deliberately pessimistic stand-in, so an "
+        "unpriced model overcounts against the cap rather than slipping under it.",
+    )
+    llm_fallback_output_per_mtok: float = Field(
+        default=100.0,
+        ge=0,
+        description="Rate for output tokens of an unpriced model. Pessimistic, as above.",
+    )
+    exa_cost_estimate_usd: float = Field(
+        default=0.05,
+        ge=0,
+        description="Cost assumed for one Exa search: reserved against the cap "
+        "before each search, and recorded (flagged estimated) when Exa's "
+        "response carries no costDollars. Deliberately high; set it from your "
+        "Exa usage page.",
+    )
+    daily_spend_cap_usd: float | None = Field(
+        default=None,
+        gt=0,
+        description="Most the service may spend on Exa and the LLM per UTC day. "
+        "Required when APP_ENV=prod; unset means unlimited (with a warning).",
+    )
+    background_spend_share: float = Field(
+        default=0.6,
+        ge=0,
+        le=1,
+        description="Fraction of the daily cap background work (the nightly run, "
+        "follow-ups) may use. The rest is reserved for users.",
+    )
+    spend_alert_fraction: float = Field(
+        default=0.8,
+        gt=0,
+        le=1,
+        description="Log spend_threshold_crossed, once a day, when settled spend "
+        "reaches this fraction of the cap.",
+    )
+    spend_resume_jitter_seconds: float = Field(
+        default=300.0,
+        ge=0,
+        description="Jobs held by the cap resume within this many seconds after "
+        "00:00 UTC, so they do not all start in the same second.",
+    )
+
     # ---------------------------------------------------------- job queue
     job_max_attempts: int = Field(
         default=3,
@@ -315,6 +382,46 @@ class Settings(BaseSettings):
             raise ValueError(
                 "JOB_HEARTBEAT_SECONDS must be shorter than JOB_LOCK_TIMEOUT_MINUTES, "
                 "or healthy jobs would be reaped between heartbeats."
+            )
+        return self
+
+    @field_validator("llm_prices_json", mode="before")
+    @classmethod
+    def _parse_prices(cls, v: Any) -> Any:
+        if not isinstance(v, str):
+            return v
+        if not v.strip():
+            return {}
+        try:
+            raw = json.loads(v)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"LLM_PRICES_JSON is not valid JSON: {exc}") from exc
+        if not isinstance(raw, dict):
+            raise ValueError("LLM_PRICES_JSON must be a JSON object keyed by model id")
+        prices = {}
+        for model, entry in raw.items():
+            try:
+                prices[model] = LLMPrice.model_validate(entry)
+            except ValidationError as exc:
+                fields = ", ".join(str(e["loc"][0]) for e in exc.errors() if e["loc"])
+                raise ValueError(
+                    f"LLM_PRICES_JSON entry for '{model}' needs non-negative "
+                    f"input_per_mtok, output_per_mtok, cache_read_per_mtok and "
+                    f"cache_write_per_mtok (problem with: {fields or 'the entry'})"
+                ) from exc
+        return prices
+
+    @field_validator("daily_spend_cap_usd", mode="before")
+    @classmethod
+    def _blank_cap_is_unset(cls, v: Any) -> Any:
+        return None if isinstance(v, str) and not v.strip() else v
+
+    @model_validator(mode="after")
+    def _require_cap_in_prod(self) -> "Settings":
+        if self.app_env == "prod" and self.daily_spend_cap_usd is None:
+            raise ValueError(
+                "DAILY_SPEND_CAP_USD is required when APP_ENV=prod: without it "
+                "nothing bounds what the service can spend in a day."
             )
         return self
 

@@ -71,5 +71,6 @@ class ErrorOut(BaseModel):
         "upstream_unavailable",
         "configuration_error",
         "internal_error",
+        "spend_cap_reached",
     ]
     detail: str

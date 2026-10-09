@@ -95,7 +95,7 @@ def test_retry_after_parsing(header, seconds):
     assert ratelimit.retry_after_seconds(header) == seconds
 
 
-async def test_exa_backs_off_on_429(monkeypatch):
+async def test_exa_backs_off_on_429(monkeypatch, ledger):
     import httpx
 
     from app.services.news.exa import ExaNewsProvider

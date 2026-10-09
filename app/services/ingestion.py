@@ -62,6 +62,7 @@ from app.core.errors import (
     MetrixError,
     NewsProviderError,
     PriceDataError,
+    SpendCapReached,
     TickerNotFoundError,
     is_permanent,
 )
@@ -103,6 +104,10 @@ class IngestResult:
     # The errors behind per-movement failures, so a queued job can decide
     # whether to retry. `warnings` is the human-readable side of the same.
     failures: list[MetrixError] = field(default_factory=list)
+    # Set when the spend cap stopped enrichment part-way. The prices are
+    # stored and the ticker is COMPLETE; the remaining movements stay as they
+    # were. A queued job re-raises it to be held until the cap resets.
+    spend_capped: SpendCapReached | None = None
 
 
 # Handlers pass one in to publish progress on their job (`Job.progress`).
@@ -262,6 +267,10 @@ async def ingest_ticker(
 
     `retry_exhausted` also retries movements that have failed
     `NEWS_MAX_ATTEMPTS` times; it is what `refresh=true` means for news.
+
+    If the spend cap refuses a call, enrichment stops there, the ticker is
+    still finished with its new prices, and the refusal is returned in
+    `result.spend_capped` rather than raised.
     """
     report = progress or _no_progress
     symbol = symbol.strip().upper()
@@ -299,15 +308,24 @@ async def ingest_ticker(
 
     if budget:
         await report({"stage": "enriching", "done": 0, "total": len(budget)})
-        peers = await resolve_peers(session, ticker, llm)
-        for done, movement in enumerate(budget, start=1):
-            linked = await _enrich_movement(
-                session, ticker, movement, peers, news_provider, llm, result
-            )
-            result.articles_linked += linked
-            result.movements_enriched += 1
-            await session.commit()
-            await report({"stage": "enriching", "done": done, "total": len(budget)})
+        try:
+            peers = await resolve_peers(session, ticker, llm)
+            for done, movement in enumerate(budget, start=1):
+                linked = await _enrich_movement(
+                    session, ticker, movement, peers, news_provider, llm, result
+                )
+                result.articles_linked += linked
+                result.movements_enriched += 1
+                await session.commit()
+                await report({"stage": "enriching", "done": done, "total": len(budget)})
+        except SpendCapReached as exc:
+            # The prices are stored and committed; only news waits. Undo the
+            # movement in progress (its attempt was not really made) and
+            # finish the ticker below, then let the caller see the refusal.
+            await session.rollback()
+            ticker = await get_or_create_ticker(session, symbol)
+            result.spend_capped = exc
+            result.warnings.append(f"News not fetched: {exc}")
 
     skipped = len(pending) - len(budget)
     if skipped > 0:
@@ -330,6 +348,7 @@ async def ingest_ticker(
         movements=result.movements_detected,
         enriched=result.movements_enriched,
         articles=result.articles_linked,
+        spend_capped=result.spend_capped is not None,
     )
     return result
 
@@ -652,6 +671,12 @@ async def _search_all_tiers(
         *(news_provider.search(request) for _, request in queries),
         return_exceptions=True,
     )
+
+    # A refusal from the spend cap is not a failed search: the tiers that ran
+    # are cached, and the movement is retried tomorrow from where it stands.
+    for response in responses:
+        if isinstance(response, SpendCapReached):
+            raise response
 
     candidates: list[tuple[str, NewsCandidate]] = []
     failures = 0
