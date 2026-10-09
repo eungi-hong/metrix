@@ -23,6 +23,24 @@ Everything except `/health` needs a key: `Authorization: Bearer mtx_...` for the
 
 ---
 
+## Live demo
+
+**<https://LIVE-DEMO-URL-PENDING>** (the frontend; the API it calls is on Railway)
+
+- Open the link and enter the demo key under the key icon. The key is shared with
+  reviewers alongside the submission, never in this repository. Without one, **View
+  demo data** shows the workspace on local fixture data.
+- With the key you can search any US-listed ticker. NVDA, AAPL, TSLA, MSFT and AMZN are
+  pre-warmed every weekday night; any other ticker is fetched on first request, and
+  the page shows the job's progress while it runs. Chat answers from the stored data.
+- The API serves pre-warmed tickers without a key too, but nothing that costs money:
+  new tickers, refreshes and chat need the key. Spend is capped per day.
+
+How it is deployed, how a merge to `main` reaches it, and the kill switch:
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
+---
+
 ## Quick start
 
 ```bash
