@@ -1,8 +1,12 @@
 """Tests for running behind a host rather than docker compose: database URLs
-in the forms hosts hand out, CORS for preview deployments, and the admin view
-of the proxy headers that TRUSTED_PROXY_COUNT is measured with."""
+in the forms hosts hand out, CORS for preview deployments, the admin view
+of the proxy headers that TRUSTED_PROXY_COUNT is measured with, and the
+worker's wait for the API's migrations."""
 
 from __future__ import annotations
+
+import sys
+from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -142,3 +146,35 @@ async def test_request_info_shows_the_peer_and_each_candidate_client(admin_token
     assert body["client_ip"] == "203.0.113.9"  # the forged 6.6.6.6 is ignored
     assert body["client_ip_by_trusted_count"] == {"0": "10.0.0.7", "1": "203.0.113.9", "2": "6.6.6.6"}
     assert "s3cret" not in response.text
+
+
+# ------------------------------------------------- waiting for migrations
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+
+from wait_for_migrations import Schema, compare, script_directory  # noqa: E402
+
+
+@pytest.fixture(scope="module")
+def migrations():
+    return script_directory()
+
+
+def test_the_repository_has_a_single_migration_head(migrations):
+    # Two heads means parallel branches each added a migration; deploys
+    # would migrate to neither. Merge them before shipping.
+    assert len(migrations.get_heads()) == 1
+
+
+def test_a_database_at_head_is_ready(migrations):
+    assert compare(set(migrations.get_heads()), migrations) is Schema.READY
+
+
+def test_an_unmigrated_or_older_database_is_behind(migrations):
+    head = migrations.get_revision(migrations.get_current_head())
+    assert compare(set(), migrations) is Schema.BEHIND
+    assert compare({head.down_revision}, migrations) is Schema.BEHIND
+
+
+def test_a_database_newer_than_the_code_is_a_rollback_and_ready(migrations):
+    assert compare({"f00dfacecafe"}, migrations) is Schema.AHEAD
