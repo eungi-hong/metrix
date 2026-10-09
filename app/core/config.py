@@ -13,6 +13,10 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+# Calendar days convert to trading days at roughly 5 in 7 (ignoring holidays).
+TRADING_DAYS_PER_WEEK = 5
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -67,6 +71,20 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------- ingestion
     price_history_days: int = Field(
         default=365, ge=30, description="Default trailing window of prices to pull."
+    )
+    price_batch_size: int = Field(
+        default=100,
+        ge=1,
+        description="Symbols per yfinance batch download.",
+    )
+    prewarm_price_lookback_days: int = Field(
+        default=45,
+        ge=1,
+        description=(
+            "Calendar days of prices re-fetched for a ticker that already has "
+            "stored bars; merged with them before detection. Must cover more "
+            "trading days than MOVEMENT_STD_WINDOW."
+        ),
     )
     news_window_days_before: int = Field(
         default=3,
@@ -212,6 +230,13 @@ class Settings(BaseSettings):
             raise ValueError(
                 "WORKER_INTERACTIVE_SLOTS must be smaller than WORKER_CONCURRENCY, "
                 "or nothing but interactive jobs would ever run."
+            )
+        trading_days = self.prewarm_price_lookback_days * TRADING_DAYS_PER_WEEK / 7
+        if trading_days <= self.movement_std_window:
+            raise ValueError(
+                "PREWARM_PRICE_LOOKBACK_DAYS must span more trading days than "
+                "MOVEMENT_STD_WINDOW, so the refreshed window overlaps the stored "
+                "bars the newest days' rolling volatility is computed from."
             )
         if self.job_heartbeat_seconds >= self.job_lock_timeout_minutes * 60:
             raise ValueError(

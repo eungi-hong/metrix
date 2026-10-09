@@ -5,6 +5,13 @@ detector is pure, the providers are swappable, the scorer takes plain data),
 and this module's job is to sequence them, persist the results, and make the
 whole thing idempotent and partially fault-tolerant.
 
+The pipeline is two steps that also run on their own: `refresh_prices` (bars,
+profile, detection, movements -- cheap, and batchable across tickers) and
+`enrich_movement` (news and scoring for one movement -- the expensive part).
+`ingest_ticker` is the first followed by the second over the movements its
+budget allows. The worker runs them separately: prices for a whole batch of
+tickers at once, then enrichment one movement per job.
+
 Idempotency
 -----------
 Re-running for a ticker extends and corrects rather than duplicating. Price
@@ -60,7 +67,7 @@ from app.core.errors import (
 from app.core.logging import get_logger
 from app.models.enums import IngestStatus, NewsStatus
 from app.models.jobs import JobKind, JobSource
-from app.models.market import Movement, PriceBar, Ticker
+from app.models.market import PRICE_DECIMALS, Movement, PriceBar, Ticker
 from app.models.news import MovementNewsLink, NewsArticle, url_fingerprint
 from app.services import prices as price_service
 from app.services import queue
@@ -239,18 +246,16 @@ async def ingest_ticker(
         await session.commit()
         raise
 
-    _apply_profile(ticker, history.profile)
-    result.bars_written = await _upsert_price_bars(session, ticker, history.bars)
-
-    params = DetectionParams.from_settings()
-    detected = detect_movements([b.to_point() for b in history.bars], params)
-    movements = await _upsert_movements(session, ticker, detected, params)
-    result.movements_detected = len(movements)
+    refreshed = await refresh_prices(session, ticker, history)
+    result.bars_written = refreshed.bars_written
+    result.movements_detected = len(refreshed.movements)
     await session.commit()
 
     now = _now()
     pending = [
-        m for m in movements if needs_enrichment(m, now, retry_exhausted=retry_exhausted)
+        m
+        for m in refreshed.unfinished
+        if needs_enrichment(m, now, retry_exhausted=retry_exhausted)
     ]
     budget = sorted(
         pending, key=lambda m: (m.abs_return, m.date), reverse=True
@@ -290,6 +295,77 @@ async def ingest_ticker(
         articles=result.articles_linked,
     )
     return result
+
+
+@dataclass(slots=True)
+class PriceRefresh:
+    """What `refresh_prices` stored and found."""
+
+    bars_written: int
+    # Every movement detected in the stored history, after this refresh.
+    movements: list[Movement]
+    # Movements that did not exist before this refresh.
+    created: list[Movement]
+    # Movements whose news is not COMPLETE: new, PENDING, PARTIAL or FAILED.
+    # Callers decide which of these to spend enrichment on (`needs_enrichment`).
+    unfinished: list[Movement]
+
+
+async def refresh_prices(
+    session: AsyncSession, ticker: Ticker, history: price_service.PriceHistory
+) -> PriceRefresh:
+    """Store fetched bars, apply the profile, and re-run movement detection.
+
+    `history` may be the full trailing year or only the last few weeks: it is
+    merged with the bars already stored (rebasing them if a split or dividend
+    has revised adjusted closes since), and detection runs over the merged
+    series. Each day's rolling volatility is therefore computed from the full
+    run of days before it, not just from what this fetch returned.
+
+    Flushes but does not commit. Assumes the caller holds the ticker claim,
+    since this rewrites the ticker's bars and may delete movements.
+    """
+    stored = [
+        price_service.PriceBarData(
+            date=bar.date,
+            open=_as_float(bar.open),
+            high=_as_float(bar.high),
+            low=_as_float(bar.low),
+            close=_as_float(bar.close),
+            adj_close=float(bar.adj_close),
+            volume=bar.volume,
+        )
+        for bar in (
+            await session.scalars(
+                sa.select(PriceBar).where(PriceBar.ticker_id == ticker.id)
+            )
+        ).all()
+    ]
+    merged = price_service.merge_price_bars(stored, history.bars)
+    if merged.rebased_by is not None:
+        logger.info(
+            "price_history_rebased",
+            symbol=ticker.symbol,
+            factor=round(merged.rebased_by, 6),
+        )
+    if not merged.overlapped:
+        # The fetch did not reach back to the stored bars, so a corporate
+        # action in the gap would go unnoticed. The caller sizes the window to
+        # avoid this; it is logged rather than fatal because the bars are real.
+        logger.warning("price_history_gap", symbol=ticker.symbol)
+
+    _apply_profile(ticker, history.profile)
+    bars_written = await _upsert_price_bars(session, ticker, merged.bars)
+
+    params = DetectionParams.from_settings()
+    detected = detect_movements([bar.to_point() for bar in merged.bars], params)
+    movements, created = await _upsert_movements(session, ticker, detected, params)
+    return PriceRefresh(
+        bars_written=bars_written,
+        movements=movements,
+        created=created,
+        unfinished=[m for m in movements if m.news_status != NewsStatus.COMPLETE],
+    )
 
 
 def _apply_profile(ticker: Ticker, profile: price_service.TickerProfile) -> None:
@@ -336,7 +412,7 @@ async def _upsert_price_bars(
                 )
             )
             written += 1
-        elif float(current.adj_close) != bar.adj_close:
+        elif float(current.adj_close) != round(bar.adj_close, PRICE_DECIMALS):
             # Adjusted closes are revised by splits and dividends after the fact.
             current.open, current.high, current.low = bar.open, bar.high, bar.low
             current.close, current.adj_close, current.volume = (
@@ -355,8 +431,11 @@ async def _upsert_movements(
     ticker: Ticker,
     detected: list[DailyReturn],
     params: DetectionParams,
-) -> list[Movement]:
-    """Persist detected movements, preserving news already attached to them."""
+) -> tuple[list[Movement], list[Movement]]:
+    """Persist detected movements, preserving news already attached to them.
+
+    Returns every detected movement, and the subset that is new.
+    """
     existing: dict[object, Movement] = {
         m.date: m
         for m in (
@@ -367,11 +446,13 @@ async def _upsert_movements(
     }
 
     kept: list[Movement] = []
+    created: list[Movement] = []
     for item in detected:
         movement = existing.get(item.date)
         if movement is None:
             movement = Movement(ticker_id=ticker.id, date=item.date)
             session.add(movement)
+            created.append(movement)
         movement.daily_return = item.daily_return
         movement.abs_return = item.abs_return
         movement.direction = item.direction
@@ -395,7 +476,7 @@ async def _upsert_movements(
             await session.delete(movement)
 
     await session.flush()
-    return kept
+    return kept, created
 
 
 async def _enrich_movement(
@@ -682,6 +763,11 @@ async def mark_ingestion_failed(
 
 async def _no_progress(_: dict[str, Any]) -> None:
     return None
+
+
+def _as_float(value: object | None) -> float | None:
+    """Stored prices are NUMERIC; the detector works in floats."""
+    return None if value is None else float(value)  # type: ignore[arg-type]
 
 
 def _now() -> datetime:

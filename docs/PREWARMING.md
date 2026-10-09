@@ -200,3 +200,67 @@ and nobody holds the run's row lock while enriching. A run is finished when it h
 queued or running jobs left. Each job checks this after committing its own final
 state, so when the last two jobs finish at the same moment, at least one of them sees
 the other as done.
+
+## Ingestion as composable steps
+
+`ingest_ticker` used to do everything in one function. It is now two steps that also
+run on their own. `refresh_prices` stores bars, applies the company profile, re-runs
+detection and upserts movements; it is cheap, and batchable across tickers.
+`enrich_movement` searches, scores and links news for one movement; it loads its own
+ticker and peers, and is the expensive part. `ingest_ticker` is still the on-demand
+path: it fetches one ticker's year of prices, runs `refresh_prices`, then enriches the
+movements its budget allows. It shares one peers lookup across those movements, as
+before, so on-demand behaviour is unchanged.
+
+### Batched prices
+
+`prices.fetch_price_histories` downloads up to `PRICE_BATCH_SIZE` symbols per
+`yf.download` call and returns, per symbol, either its history or the error that symbol
+alone hit, so a delisted name never costs the rest of its batch. The company profile is
+one HTTP call per symbol, so it is fetched only for tickers with nothing stored yet.
+
+`yf.download` pads every symbol to the union of all dates, so a symbol with no data
+arrives as rows of NaN, and it records per-symbol errors only in its log. Without
+those errors, a timeout on one symbol looks the same as an unknown symbol, and the
+queue treats an unknown symbol as a permanent error. The batch fetch therefore calls
+yfinance's internal `_download_impl` with its own context object, which collects the
+errors. An error that reads like an unknown symbol, or no data with no error, becomes
+`TickerNotFoundError`; any other error is a transient `PriceDataError`. yfinance is
+pinned below 2.0, a test fails if the internal API moves, and if it is missing at run
+time the code falls back to the public function.
+
+### Refreshing a short window
+
+A ticker that already has stored bars only needs its recent prices again. The nightly
+refresh fetches `PREWARM_PRICE_LOOKBACK_DAYS` (45) and merges them with what is stored,
+and detection runs over the merged series, so the newest days' rolling volatility is
+computed from the full 20 days before them, not from whatever the short fetch returned.
+
+That merge has a trap the brief did not anticipate. Adjusted closes are revised
+retroactively: a dividend rescales every earlier adjusted close, and a split rescales
+every earlier price. Bars stored last month and bars fetched today can sit on different
+bases. Joined naively, a 2-for-1 split appears as a -50% movement at the seam. So
+`merge_price_bars` compares the oldest fresh day that is also stored. If the two
+disagree by more than rounding, every stored bar before the fresh window is rebased by
+that ratio: the adjusted close by the adjusted ratio, raw prices by the raw-close ratio
+(which yfinance also split-adjusts), and volume inversely. The rebased bars are written
+back, so the stored history stays on one basis. This only works if the fresh window
+overlaps the stored bars. When it does not, the refresh logs `price_history_gap`, and
+the caller is responsible for sizing the window to cover the gap since the last
+refresh.
+
+Merging also changes one thing about on-demand ingestion: a stored movement older than
+the fetched year is no longer deleted on re-ingest, because detection now covers every
+stored bar rather than only the fetched ones.
+
+Writing this exposed an older bug. `_upsert_price_bars` compared the stored
+`NUMERIC(18,6)` adjusted close with the unrounded fetched float, so every bar looked
+changed and was rewritten on every ingestion. It now compares at the column's
+precision, so a refresh with nothing new writes nothing.
+
+### Scoring as request and result
+
+`relevance.score_candidates` is now `build_scoring_request` (prompt and output schema),
+the model call, and `apply_scoring_result` (report to scored candidates). This mirrors
+the `execute`/`parse` split on news providers. Both halves are pure, so a batch scorer
+can build requests tonight and apply results when the batch returns.

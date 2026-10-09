@@ -11,6 +11,10 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base, JSONType, TimestampMixin
 from app.models.enums import Direction, IngestStatus, NewsStatus, sa_enum
 
+# Decimal places prices are stored to. Anything compared against a stored
+# price must be rounded to this first, or it never compares equal.
+PRICE_DECIMALS = 6
+
 
 class Ticker(Base, TimestampMixin):
     """A public company we track.
@@ -74,11 +78,11 @@ class PriceBar(Base):
     )
     date: Mapped[date] = mapped_column(sa.Date, nullable=False)
 
-    open: Mapped[float | None] = mapped_column(sa.Numeric(18, 6))
-    high: Mapped[float | None] = mapped_column(sa.Numeric(18, 6))
-    low: Mapped[float | None] = mapped_column(sa.Numeric(18, 6))
-    close: Mapped[float | None] = mapped_column(sa.Numeric(18, 6))
-    adj_close: Mapped[float] = mapped_column(sa.Numeric(18, 6), nullable=False)
+    open: Mapped[float | None] = mapped_column(sa.Numeric(18, PRICE_DECIMALS))
+    high: Mapped[float | None] = mapped_column(sa.Numeric(18, PRICE_DECIMALS))
+    low: Mapped[float | None] = mapped_column(sa.Numeric(18, PRICE_DECIMALS))
+    close: Mapped[float | None] = mapped_column(sa.Numeric(18, PRICE_DECIMALS))
+    adj_close: Mapped[float] = mapped_column(sa.Numeric(18, PRICE_DECIMALS), nullable=False)
     volume: Mapped[int | None] = mapped_column(sa.BigInteger)
 
     ticker: Mapped[Ticker] = relationship(back_populates="prices", lazy="noload")
@@ -111,8 +115,8 @@ class Movement(Base, TimestampMixin):
         sa_enum(Direction, "direction"), nullable=False, index=True
     )
 
-    prev_adj_close: Mapped[float] = mapped_column(sa.Numeric(18, 6), nullable=False)
-    adj_close: Mapped[float] = mapped_column(sa.Numeric(18, 6), nullable=False)
+    prev_adj_close: Mapped[float] = mapped_column(sa.Numeric(18, PRICE_DECIMALS), nullable=False)
+    adj_close: Mapped[float] = mapped_column(sa.Numeric(18, PRICE_DECIMALS), nullable=False)
     volume: Mapped[int | None] = mapped_column(sa.BigInteger)
 
     # --- audit trail for the detection decision ---

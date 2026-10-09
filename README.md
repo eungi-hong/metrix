@@ -394,12 +394,14 @@ app/
   api/errors.py   domain exception → HTTP status, one error body shape
   services/
     movements.py  volatility-adjusted detection — pure, no DB, no network
-    prices.py     yfinance, defensive
+    prices.py     yfinance, defensive; single and batched fetches, and the merge
+                  that rebases stored history after splits and dividends
     news/         provider abstraction, Exa adapter, fixture adapter, response cache,
                   tier query construction
     peers.py      competitor resolution (LLM, cached on the ticker)
     relevance.py  the scoring prompt and its structured output
-    ingestion.py  orchestration: prices → movements → news → links
+    ingestion.py  orchestration: refresh_prices (bars → movements), then
+                  enrich_movement (news → scores → links) per movement
     queue.py      the Postgres job queue: enqueue/dedupe, claim, retry, reap
     job_handlers.py  what each kind of queued job does
     chat.py       retrieval, prompt assembly, citation labels
@@ -513,6 +515,11 @@ No Docker, no network, no API keys.
   enrichment budget.
 - `tests/test_worker.py` — the worker and job handlers end to end, including
   graceful shutdown and the follow-up job a PARTIAL enrichment enqueues.
+- `tests/test_prices.py` — batched yfinance parsing from a synthetic multi-ticker
+  frame, merging a short refresh window into stored history, and the split/dividend
+  rebase.
+- `tests/test_relevance.py` — the scoring request and result, built and applied
+  without the model in between.
 - `tests/test_show_cli.py` — the renderer's citation parsing, colour gating, and
   sparkline edge cases.
 

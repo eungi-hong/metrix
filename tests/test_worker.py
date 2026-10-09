@@ -25,7 +25,6 @@ from app.models.jobs import Job, JobKind, JobSource, JobStatus
 from app.models.market import Movement
 from app.services import ingestion, queue
 from app.services import prices as price_service
-from app.services.movements import DetectionParams, detect_movements
 from app.services.news.queries import news_window_closes_at
 from app.worker import Worker
 from tests.conftest import _use_real_sqlite_transactions
@@ -186,10 +185,7 @@ async def test_a_partial_enrichment_enqueues_its_followup_at_window_close(
     async with db() as session:
         ticker = await ingestion.get_or_create_ticker(session, "NEW")
         history = await price_service.fetch_price_history("NEW")
-        params = DetectionParams.from_settings()
-        detected = detect_movements([b.to_point() for b in history.bars], params)
-        ingestion._apply_profile(ticker, history.profile)
-        (movement,) = await ingestion._upsert_movements(session, ticker, detected, params)
+        (movement,) = (await ingestion.refresh_prices(session, ticker, history)).created
         await session.commit()
 
     queued = await enqueue(

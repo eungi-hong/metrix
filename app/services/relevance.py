@@ -15,6 +15,12 @@ the link and shown in the API response.
 One call per movement (not per article, not per tier) is deliberate: the model
 sees all candidates side by side, which lets it rank them against each other
 and reassign the tier when a "macro" search turned up a company-specific story.
+
+The call is split into two pure halves around the network, the same way news
+providers split `execute` from `parse`: `build_scoring_request` produces the
+prompt and output schema, `apply_scoring_result` turns the model's report into
+scored candidates. `score_candidates` runs the request synchronously in
+between; a batch scorer can submit requests now and apply results later.
 """
 
 from __future__ import annotations
@@ -125,31 +131,54 @@ def deduplicate(
     return unique
 
 
-async def score_candidates(
+# Generous for one assessment per candidate (three tiers of up to eight each).
+SCORING_MAX_TOKENS = 4096
+
+
+@dataclass(frozen=True, slots=True)
+class ScoringRequest:
+    """Everything needed to score one movement's candidates, and to read the answer.
+
+    `candidates` is the deduplicated list the prompt's indices refer to, so
+    the result must be applied against this request, not rebuilt.
+    """
+
+    context: MovementContext
+    candidates: list[tuple[str, NewsCandidate]]
+    system: str
+    user: str
+    output_model: type[RelevanceReport] = RelevanceReport
+    max_tokens: int = SCORING_MAX_TOKENS
+
+
+def build_scoring_request(
     context: MovementContext,
     candidates: list[tuple[str, NewsCandidate]],
     peers: PeerSet,
-    llm: LLMProvider,
-    min_score: float | None = None,
-) -> list[ScoredCandidate]:
-    """Score every candidate against one movement; return those worth linking.
-
-    Raises `LLMError` if the model call fails -- the caller decides whether a
-    movement without news is acceptable (it is) or fatal (it is not).
-    """
+) -> ScoringRequest | None:
+    """The scoring prompt for one movement, or None if nothing needs scoring."""
     unique = deduplicate(candidates)
     if not unique:
-        return []
-
-    threshold = settings.relevance_min_score if min_score is None else min_score
-    report = await llm.parse_structured(
+        return None
+    return ScoringRequest(
+        context=context,
+        candidates=unique,
         system=_SYSTEM,
         user=_build_prompt(context, unique, peers),
-        output_model=RelevanceReport,
-        max_tokens=4096,
     )
 
-    by_index = {i: pair for i, pair in enumerate(unique)}
+
+def apply_scoring_result(
+    request: ScoringRequest,
+    report: RelevanceReport,
+    *,
+    scored_by: str,
+    min_score: float | None = None,
+) -> list[ScoredCandidate]:
+    """The candidates the model judged worth linking, best first."""
+    threshold = settings.relevance_min_score if min_score is None else min_score
+    context = request.context
+    by_index = dict(enumerate(request.candidates))
     scored: list[ScoredCandidate] = []
     for assessment in report.assessments:
         pair = by_index.get(assessment.index)
@@ -170,7 +199,7 @@ async def score_candidates(
                 score=assessment.score,
                 rationale=assessment.rationale.strip(),
                 search_tier=search_tier,
-                scored_by=llm.model,
+                scored_by=scored_by,
             )
         )
 
@@ -179,11 +208,35 @@ async def score_candidates(
         "relevance_scored",
         symbol=context.symbol,
         date=str(context.movement_date),
-        candidates=len(unique),
+        candidates=len(request.candidates),
         linked=len(scored),
         tiers=sorted({s.tier.value for s in scored}),
     )
     return scored
+
+
+async def score_candidates(
+    context: MovementContext,
+    candidates: list[tuple[str, NewsCandidate]],
+    peers: PeerSet,
+    llm: LLMProvider,
+    min_score: float | None = None,
+) -> list[ScoredCandidate]:
+    """Score every candidate against one movement; return those worth linking.
+
+    Raises `LLMError` if the model call fails -- the caller decides whether a
+    movement without news is acceptable (it is) or fatal (it is not).
+    """
+    request = build_scoring_request(context, candidates, peers)
+    if request is None:
+        return []
+    report = await llm.parse_structured(
+        system=request.system,
+        user=request.user,
+        output_model=request.output_model,
+        max_tokens=request.max_tokens,
+    )
+    return apply_scoring_result(request, report, scored_by=llm.model, min_score=min_score)
 
 
 def _build_prompt(
