@@ -1,0 +1,13 @@
+# Ruff's default rules (pyflakes, and pycodestyle's error classes), which CI
+# enforces with `ruff check .`. The version is pinned in requirements-dev.txt,
+# because ruff 0.16 widened the defaults; adopting more rules should be a
+# deliberate change, not a side effect of an upgrade.
+target-version = "py312"
+
+[lint.per-file-ignores]
+# `lambda l: l.relevance_score` over news links: `l` reads as "link" here.
+"app/api/routes/tickers.py" = ["E741"]
+"app/services/chat.py" = ["E741"]
+# A string forward reference in a SQLAlchemy relationship, resolved by the ORM
+# at mapper configuration, not by Python.
+"app/models/market.py" = ["F821"]

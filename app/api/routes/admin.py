@@ -1,4 +1,5 @@
-"""Operator endpoints: users and keys, pre-warm runs, the queue, the day's spend.
+"""Operator endpoints: users and keys, pre-warm runs, the queue, the day's
+spend, and what a request looks like after the host's proxies.
 
 Guarded by a shared token in the `X-Admin-Token` header. While `ADMIN_TOKEN`
 is unset they answer 503 and say so, rather than being open by default.
@@ -10,9 +11,10 @@ from __future__ import annotations
 from datetime import date, datetime, time, timedelta, timezone
 
 import sqlalchemy as sa
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from app.api.deps import SessionDep, require_admin
+from app.core.config import settings
 from app.core.context import CallClass
 from app.models.identity import ApiKey, Plan, User
 from app.models.jobs import Job, JobKind, JobSource, JobStatus, PrewarmRun
@@ -26,6 +28,7 @@ from app.schemas.admin import (
     PrewarmRunOut,
     PrewarmTriggered,
     QueueSummary,
+    RequestInfo,
     SpendByOperation,
     SpendByUser,
     UsageSummary,
@@ -243,6 +246,35 @@ async def revoke_key(key_id: int, session: SessionDep) -> KeyOut:
         row.revoked_at = datetime.now(timezone.utc)
         await session.commit()
     return KeyOut.model_validate(row)
+
+
+@router.get(
+    "/request-info",
+    response_model=RequestInfo,
+    summary="What this request looks like on arrival, to set TRUSTED_PROXY_COUNT",
+)
+async def request_info(request: Request) -> RequestInfo:
+    """How many proxies sit in front of the API cannot be read from the
+    configuration; it has to be measured. Call this through the public URL,
+    once as is and once with a forged X-Forwarded-For: the right
+    TRUSTED_PROXY_COUNT is the one that gives your real address both times.
+    Only forwarding headers are echoed back."""
+    peer = request.client.host if request.client else None
+    forwarded_for = request.headers.get("x-forwarded-for")
+    hops = [hop.strip() for hop in (forwarded_for or "").split(",") if hop.strip()]
+    return RequestInfo(
+        peer=peer,
+        x_forwarded_for=forwarded_for,
+        hops=hops,
+        x_real_ip=request.headers.get("x-real-ip"),
+        forwarded=request.headers.get("forwarded"),
+        trusted_proxy_count=settings.trusted_proxy_count,
+        client_ip=auth.client_ip(peer, forwarded_for),
+        client_ip_by_trusted_count={
+            0: peer or "unknown",
+            **{n: hops[-n] for n in range(1, len(hops) + 1)},
+        },
+    )
 
 
 async def _user(session: SessionDep, user_id: int) -> User:
