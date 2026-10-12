@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
-from app.api.deps import CurrentUser, LLMDep, SessionDep
+from app.api.deps import CurrentUser, LLMDep, ProviderCredentialsDep, SessionDep
 from app.core.errors import UpstreamError, WorkDeferred
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.services import quotas
@@ -20,7 +20,11 @@ router = APIRouter(tags=["chat"])
     summary="Ask a question about a ticker's movements, answered from stored data",
 )
 async def chat(
-    request: ChatRequest, session: SessionDep, llm: LLMDep, principal: CurrentUser
+    request: ChatRequest,
+    session: SessionDep,
+    llm: LLMDep,
+    provider_credentials: ProviderCredentialsDep,
+    principal: CurrentUser,
 ) -> ChatResponse:
     """Answer `question` from stored movements and linked news.
 
@@ -32,16 +36,19 @@ async def chat(
 
     Each turn counts against `chat_per_minute` and `chat_per_day`, and is
     given back if the answer fails on our side (the model is down or too busy,
-    or the daily spend cap is reached).
+    or the daily spend cap is reached). A turn made with the caller's own
+    provider keys counts against neither: it spends nothing of ours.
     """
     if not request.question.strip():
         raise HTTPException(status_code=422, detail="`question` must not be blank.")
-    await quotas.charge(principal, Quota.CHAT_PER_MINUTE)
-    try:
-        await quotas.charge(principal, Quota.CHAT_PER_DAY)
-    except Exception:
-        await quotas.refund(principal, Quota.CHAT_PER_MINUTE)
-        raise
+    charged = not provider_credentials.supplied_by_user
+    if charged:
+        await quotas.charge(principal, Quota.CHAT_PER_MINUTE)
+        try:
+            await quotas.charge(principal, Quota.CHAT_PER_DAY)
+        except Exception:
+            await quotas.refund(principal, Quota.CHAT_PER_MINUTE)
+            raise
     try:
         return await answer_question(session, request, llm, principal)
     except ConversationNotFound:
@@ -49,6 +56,7 @@ async def chat(
             status_code=404, detail=f"No conversation with id {request.conversation_id}."
         ) from None
     except (UpstreamError, WorkDeferred):
-        await quotas.refund(principal, Quota.CHAT_PER_MINUTE)
-        await quotas.refund(principal, Quota.CHAT_PER_DAY)
+        if charged:
+            await quotas.refund(principal, Quota.CHAT_PER_MINUTE)
+            await quotas.refund(principal, Quota.CHAT_PER_DAY)
         raise

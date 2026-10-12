@@ -18,12 +18,14 @@ from app.api.deps import (
 from app.core.config import LLMPrice, settings
 from app.core.errors import ConfigurationError
 from app.services import ratelimit
+from app.services.news.exa import ExaNewsProvider
 from app.services.news.fixture import FixtureNewsProvider
 from app.services.llm.openai import OpenAIProvider
 from app.models.usage import UsageEvent
 from app.models.enums import NewsStatus
 from app.models.market import Movement
 from tests.conftest import StubLLM, all_jobs, api_app, api_client
+from tests.test_spend import exa_client, search_request
 
 
 async def test_provider_key_headers_must_be_a_complete_pair():
@@ -187,3 +189,53 @@ async def test_an_empty_openai_balance_is_not_a_rate_limit(monkeypatch, code, bl
 
     assert message in str(error)
     assert bool(backoffs) is blocked
+
+
+async def test_browser_keys_are_not_held_to_the_anonymous_plan(session_factory, monkeypatch):
+    """The caller pays for the work, so production's zero anonymous plan does not apply."""
+    monkeypatch.setattr(settings, "auth_required", False)
+    monkeypatch.setitem(
+        settings.plan_limits_json,
+        "anonymous",
+        settings.plan_limits_json["anonymous"].model_copy(
+            update={"cold_ingests_per_day": 0, "refresh_per_day": 0, "chat_per_minute": 0, "chat_per_day": 0}
+        ),
+    )
+    app = api_app(session_factory, StubLLM())
+
+    async def stub_llm():
+        yield StubLLM()
+
+    async def fixture_news():
+        yield FixtureNewsProvider()
+
+    app.dependency_overrides[request_llm] = stub_llm
+    app.dependency_overrides[request_news_provider] = fixture_news
+    headers = {"X-Exa-Api-Key": "exa_test", "X-OpenAI-Api-Key": "sk-test"}
+
+    async with api_client(app) as client:
+        keyless = await client.get("/tickers/OTHER")
+        cold = await client.get("/tickers/TEST", params={"wait": True}, headers=headers)
+        chat = await client.post("/chat", json={"question": "Why did it move?"}, headers=headers)
+        keyless_chat = await client.post("/chat", json={"question": "Why did it move?"})
+
+    assert keyless.status_code == 429
+    assert cold.status_code == 200 and cold.json()["status"] == "ready"
+    assert chat.status_code == 200
+    assert keyless_chat.status_code == 429
+
+
+async def test_a_call_on_the_callers_key_is_neither_capped_nor_recorded(ledger, monkeypatch):
+    monkeypatch.setattr(settings, "daily_spend_cap_usd", 0.0)
+    calls: list[httpx.Request] = []
+    provider = ExaNewsProvider(
+        api_key="exa_test",
+        client=exa_client({"results": [], "costDollars": {"total": 0.01}}, calls),
+        caller_pays=True,
+    )
+
+    await provider.execute(search_request())
+
+    assert len(calls) == 1
+    async with ledger() as session:
+        assert await session.scalar(sa.select(UsageEvent)) is None

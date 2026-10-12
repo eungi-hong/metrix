@@ -30,10 +30,14 @@ class OpenAIProvider(LLMProvider):
         api_key: str | None = None,
         model: str | None = None,
         client: openai.AsyncOpenAI | None = None,
+        *,
+        caller_pays: bool = False,
     ) -> None:
         self._api_key = api_key or settings.openai_api_key
         self.model = model or settings.llm_model
         self._client = client
+        # The key is the caller's own: their spend, not ours (see spend.metered).
+        self._caller_pays = caller_pays
 
     @property
     def available(self) -> bool:
@@ -67,7 +71,9 @@ class OpenAIProvider(LLMProvider):
         estimate = spend.llm_estimate(
             self.model, prompt_chars=len(system) + len(user), max_tokens=max_tokens
         )
-        async with spend.metered(self.name, operation, estimate) as meter:
+        async with spend.metered(
+            self.name, operation, estimate, caller_pays=self._caller_pays
+        ) as meter:
             await ratelimit.bucket(self.name).acquire()
             try:
                 response = await client.beta.chat.completions.parse(
@@ -103,7 +109,9 @@ class OpenAIProvider(LLMProvider):
         max_tokens = max_tokens or settings.llm_max_tokens
         prompt_chars = len(system) + sum(len(str(m.get("content", ""))) for m in messages)
         estimate = spend.llm_estimate(self.model, prompt_chars=prompt_chars, max_tokens=max_tokens)
-        async with spend.metered(self.name, operation, estimate) as meter:
+        async with spend.metered(
+            self.name, operation, estimate, caller_pays=self._caller_pays
+        ) as meter:
             await ratelimit.bucket(self.name).acquire()
             try:
                 response = await client.chat.completions.create(

@@ -56,9 +56,17 @@ class _RetryableUpstream(Exception):
 class ExaNewsProvider(NewsProvider):
     name = "exa"
 
-    def __init__(self, api_key: str | None = None, client: httpx.AsyncClient | None = None):
+    def __init__(
+        self,
+        api_key: str | None = None,
+        client: httpx.AsyncClient | None = None,
+        *,
+        caller_pays: bool = False,
+    ):
         self._api_key = api_key or settings.exa_api_key
         self._client = client
+        # The key is the caller's own: their spend, not ours (see spend.metered).
+        self._caller_pays = caller_pays
         self._owns_client = client is None
 
     def _require_client(self) -> httpx.AsyncClient:
@@ -104,7 +112,9 @@ class ExaNewsProvider(NewsProvider):
         client = self._require_client()
         # Reserved outside the try, so a refusal reaches the caller as
         # SpendCapReached rather than as a failed search.
-        async with spend.metered(self.name, "search", spend.exa_estimate()) as meter:
+        async with spend.metered(
+            self.name, "search", spend.exa_estimate(), caller_pays=self._caller_pays
+        ) as meter:
             try:
                 payload = await self._post(client, self._body(request))
             except NewsProviderError:

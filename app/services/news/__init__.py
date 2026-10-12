@@ -17,7 +17,11 @@ _PROVIDERS: dict[str, type[NewsProvider]] = {
 
 
 def build_news_provider(
-    session: AsyncSession, provider_name: str | None = None, *, api_key: str | None = None
+    session: AsyncSession,
+    provider_name: str | None = None,
+    *,
+    api_key: str | None = None,
+    caller_pays: bool = False,
 ) -> NewsProvider:
     """The configured provider, wrapped in the read-through response cache.
 
@@ -31,7 +35,7 @@ def build_news_provider(
     except KeyError:  # pragma: no cover - guarded by pydantic Literal
         raise ValueError(f"Unknown news provider '{name}'") from None
     if name == "exa":
-        return CachingNewsProvider(ExaNewsProvider(api_key=api_key), session)
+        return CachingNewsProvider(ExaNewsProvider(api_key=api_key, caller_pays=caller_pays), session)
     return CachingNewsProvider(provider_cls(), session)
 
 
