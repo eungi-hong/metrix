@@ -14,15 +14,15 @@ export function MovementsPanel({ movements, selectedId, onSelect }: {
         const selected = movement.id === selectedId;
         const positive = movement.direction === "up";
         const rationale = movement.news[0]?.rationale;
-        return <button key={movement.id} onClick={() => onSelect(movement)} className={`w-full rounded-xl border p-3 text-left transition-colors ${selected ? "border-blue-200 bg-blue-50/70" : "border-transparent hover:border-line hover:bg-white"}`}>
+        return <button key={movement.id} onClick={() => onSelect(movement)} className={`w-full rounded-xl border p-3 text-left transition-colors ${selected ? "border-accent-line bg-accent-soft" : "border-transparent hover:border-line hover:bg-panel"}`}>
           <div className="flex items-center gap-2">
-            <span className={`grid size-7 shrink-0 place-items-center rounded-full ${positive ? "bg-emerald-50 text-emerald-700" : "bg-red-50 text-red-700"}`}>{positive ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}</span>
-            <div className="min-w-0 flex-1"><div className="flex items-baseline justify-between gap-2"><span className="text-sm font-semibold">{shortDate(movement.date)}</span><span className={`text-sm font-bold ${positive ? "text-emerald-700" : "text-red-700"}`}>{pct(movement.daily_return_pct, true)}</span></div><p className="mt-0.5 truncate text-xs text-mute">{movement.news_status === "complete" ? `${movement.news.length} evidence item${movement.news.length === 1 ? "" : "s"}` : `Evidence ${movement.news_status}`}</p></div>
+            <span className={`grid size-7 shrink-0 place-items-center rounded-full ${positive ? "bg-positive-soft text-positive" : "bg-negative-soft text-negative"}`}>{positive ? <ArrowUpRight size={16} /> : <ArrowDownRight size={16} />}</span>
+            <div className="min-w-0 flex-1"><div className="flex items-baseline justify-between gap-2"><span className="text-sm font-semibold">{shortDate(movement.date)}</span><span className={`text-sm font-bold ${positive ? "text-positive" : "text-negative"}`}>{pct(movement.daily_return_pct, true)}</span></div><p className="mt-0.5 truncate text-xs text-mute">{movement.news_status === "complete" ? `${movement.news.length} evidence item${movement.news.length === 1 ? "" : "s"}` : `Evidence ${movement.news_status}`}</p></div>
             <ChevronRight aria-hidden="true" size={15} className="text-mute" />
           </div>
           <p className="mt-2 line-clamp-2 text-xs leading-4 text-mute"><span className="font-medium text-ink">{movement.sigma_multiple?.toFixed(1) ?? "—"}σ · {pct(movement.threshold * 100)}</span>{rationale ? ` — ${rationale}` : " — Evidence is still being collected."}</p>
         </button>;
-      })}</div> : <div className="rounded-xl border border-dashed border-line bg-white p-6 text-center"><p className="text-sm font-semibold">No movements yet</p><p className="mt-1 text-xs leading-5 text-mute">When stored history is available, detected movements will appear here.</p></div>}
+      })}</div> : <div className="rounded-xl border border-dashed border-line bg-panel p-6 text-center"><p className="text-sm font-semibold">No movements yet</p><p className="mt-1 text-xs leading-5 text-mute">When stored history is available, detected movements will appear here.</p></div>}
     </section>
   );
 }

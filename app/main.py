@@ -64,7 +64,12 @@ def create_app() -> FastAPI:
             allow_origins=cors_origins,
             allow_credentials=False,
             allow_methods=["GET", "POST", "OPTIONS"],
-            allow_headers=["Authorization", "Content-Type"],
+            allow_headers=[
+                "Authorization",
+                "Content-Type",
+                "X-Exa-Api-Key",
+                "X-OpenAI-Api-Key",
+            ],
             max_age=600,
         )
     app.add_middleware(InteractiveAttributionMiddleware)

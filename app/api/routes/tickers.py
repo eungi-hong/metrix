@@ -25,7 +25,7 @@ from fastapi import APIRouter, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.deps import CurrentUser, LLMDep, SessionDep
+from app.api.deps import CurrentUser, LLMDep, NewsDep, ProviderCredentialsDep, SessionDep
 from app.core.config import settings
 from app.core.context import CallClass
 from app.core.errors import (
@@ -58,6 +58,7 @@ from app.services import demand, ingestion, queue, quotas, spend, symbol_directo
 from app.services.auth import Principal
 from app.services.limits import LimitResult
 from app.services.llm import LLMProvider
+from app.services.news import NewsProvider
 from app.services.movements import sigma_multiple
 from app.services.quotas import Quota
 
@@ -73,6 +74,8 @@ async def get_ticker_detail(
     symbol: str,
     session: SessionDep,
     llm: LLMDep,
+    news_provider: NewsDep,
+    provider_credentials: ProviderCredentialsDep,
     principal: CurrentUser,
     response: Response,
     start: date | None = Query(None, description="Only movements on or after this date."),
@@ -123,8 +126,24 @@ async def get_ticker_detail(
 
     ticker = await ingestion.get_ticker(session, symbol)
     try:
+        if provider_credentials.supplied_by_user and not wait:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Browser-supplied provider keys require wait=true so they are used only "
+                    "for this request and are never placed on a background job."
+                ),
+            )
         ensured = await _ensure_data(
-            session, ticker, symbol, llm, principal, refresh=refresh, wait=wait
+            session,
+            ticker,
+            symbol,
+            llm,
+            news_provider,
+            principal,
+            refresh=refresh,
+            wait=wait,
+            force_inline=provider_credentials.supplied_by_user,
         )
     except RateLimited:
         raise  # a refused request is not demand
@@ -303,10 +322,12 @@ async def _ensure_data(
     ticker: Ticker | None,
     symbol: str,
     llm: LLMProvider,
+    news_provider: NewsProvider,
     principal: Principal,
     *,
     refresh: bool,
     wait: bool,
+    force_inline: bool = False,
 ) -> _Ensured:
     """Fetch-if-missing / fetch-if-stale. Returns the state to report.
 
@@ -329,12 +350,20 @@ async def _ensure_data(
                 f"is available again in {math.ceil((cooldown - since).total_seconds() / 60)} "
                 "minute(s). Showing stored data."
             )
-    if wait and not quotas.limits_for(principal).allow_wait:
+    if wait and not force_inline and not quotas.limits_for(principal).allow_wait:
         wait = False
         warnings.append(_NO_WAIT_ON_PLAN.format(plan=principal.plan.value))
 
     if ticker is not None and not refresh and not ingestion.is_stale(ticker):
-        ensured = await _enrich_what_is_owed(session, ticker, llm, principal, wait=wait)
+        ensured = await _enrich_what_is_owed(
+            session,
+            ticker,
+            llm,
+            news_provider,
+            principal,
+            wait=wait,
+            allow_followup_jobs=not force_inline,
+        )
         ensured.warnings[:0] = warnings
         return ensured
 
@@ -370,7 +399,12 @@ async def _ensure_data(
                 return _Ensured(busy, _ALREADY_RUNNING, warnings=warnings)
             try:
                 result = await ingestion.ingest_ticker(
-                    session, symbol, llm=llm, retry_exhausted=refresh
+                    session,
+                    symbol,
+                    llm=llm,
+                    news_provider=news_provider,
+                    retry_exhausted=refresh,
+                    allow_followup_jobs=not force_inline,
                 )
             except (UpstreamError, ProviderBusy):
                 await quotas.refund(principal, quota)  # our outage, not their request
@@ -427,9 +461,11 @@ async def _enrich_what_is_owed(
     session: AsyncSession,
     ticker: Ticker,
     llm: LLMProvider,
+    news_provider: NewsProvider,
     principal: Principal,
     *,
     wait: bool,
+    allow_followup_jobs: bool = True,
 ) -> _Ensured:
     """Fresh prices, but maybe movements still owed news.
 
@@ -457,7 +493,13 @@ async def _enrich_what_is_owed(
             warnings: list[str] = []
             for movement in owed:
                 try:
-                    await ingestion.enrich_movement(session, movement.id, llm=llm)
+                    await ingestion.enrich_movement(
+                        session,
+                        movement.id,
+                        llm=llm,
+                        news_provider=news_provider,
+                        allow_followup_jobs=allow_followup_jobs,
+                    )
                 except MetrixError as exc:
                     warnings.append(f"{movement.date}: {exc}")
                 except WorkDeferred as exc:

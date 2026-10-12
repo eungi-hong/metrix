@@ -17,14 +17,21 @@ _PROVIDERS: dict[str, type[NewsProvider]] = {
 
 
 def build_news_provider(
-    session: AsyncSession, provider_name: str | None = None
+    session: AsyncSession, provider_name: str | None = None, *, api_key: str | None = None
 ) -> NewsProvider:
-    """The configured provider, wrapped in the read-through response cache."""
+    """The configured provider, wrapped in the read-through response cache.
+
+    ``api_key`` is request-scoped for browser BYOK mode. It is intentionally
+    passed to the provider constructor only; neither the cache nor job payloads
+    ever receive it.
+    """
     name = (provider_name or settings.news_provider).lower()
     try:
         provider_cls = _PROVIDERS[name]
     except KeyError:  # pragma: no cover - guarded by pydantic Literal
         raise ValueError(f"Unknown news provider '{name}'") from None
+    if name == "exa":
+        return CachingNewsProvider(ExaNewsProvider(api_key=api_key), session)
     return CachingNewsProvider(provider_cls(), session)
 
 

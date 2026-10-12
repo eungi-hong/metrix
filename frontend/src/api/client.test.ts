@@ -16,12 +16,20 @@ describe("MetrixApiClient", () => {
   it("reuses a supplied conversation id on a chat turn", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ conversation_id: "conv-1", ticker: "NVDA", answer: "Stored evidence.", grounded: true, sources: { movements: [], articles: [] } }), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
-    await new MetrixApiClient("http://localhost:8000", "mtx_test").sendChat({ ticker: "NVDA", question: "What moved?", conversationId: "conv-1" });
+    await new MetrixApiClient("http://localhost:8000", { exaApiKey: "exa_test", openaiApiKey: "sk-test" }).sendChat({ ticker: "NVDA", question: "What moved?", conversationId: "conv-1" });
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ ticker: "NVDA", question: "What moved?", conversation_id: "conv-1" });
+    expect(fetchMock.mock.calls[0][1].headers).toMatchObject({ "X-Exa-Api-Key": "exa_test", "X-OpenAI-Api-Key": "sk-test" });
+  });
+
+  it("allows a standalone chat turn without a selected ticker", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ conversation_id: "conv-1", ticker: null, answer: "No stored evidence.", grounded: false, sources: { movements: [], articles: [] } }), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    await new MetrixApiClient("http://localhost:8000", { exaApiKey: "exa_test", openaiApiKey: "sk-test" }).sendChat({ question: "What market themes matter this week?" });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ question: "What market themes matter this week?" });
   });
 
   it("surfaces quota responses with retry guidance", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: "rate_limited", detail: "Over the chat quota." }), { status: 429, headers: { "Retry-After": "45", "Content-Type": "application/json" } })));
-    await expect(new MetrixApiClient("http://localhost:8000", "mtx_test").sendChat({ ticker: "NVDA", question: "Why?" })).rejects.toMatchObject({ kind: "quota", retryAfter: 45, status: 429 });
+    await expect(new MetrixApiClient("http://localhost:8000", { exaApiKey: "exa_test", openaiApiKey: "sk-test" }).sendChat({ ticker: "NVDA", question: "Why?" })).rejects.toMatchObject({ kind: "quota", retryAfter: 45, status: 429 });
   });
 });
