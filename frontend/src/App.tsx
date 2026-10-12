@@ -42,7 +42,8 @@ function sourceMessage(data: TickerDetail | null, isDemo: boolean, connection: "
 export default function App() {
   const [providerKeys, setProviderKeys] = useState<ProviderKeys | null>(readSessionProviderKeys);
   const [connection, setConnection] = useState<"none" | "demo" | "own">(
-    () => readSessionProviderKeys() ? "own" : "none",
+    // Visitors start on demo access so a first question gets answered without setup.
+    () => readSessionProviderKeys() ? "own" : "demo",
   );
   const [mode, setMode] = useState<"none" | "api" | "demo">("none");
   const [symbol, setSymbol] = useState("NVDA");
@@ -56,6 +57,8 @@ export default function App() {
   const [chatLoading, setChatLoading] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [conversationId, setConversationId] = useState<string | undefined>();
+  // The question whose answer failed, already shown in the thread, so Retry resends it without repeating it.
+  const [failedQuestion, setFailedQuestion] = useState<string | null>(null);
 
   const selectedMovement = useMemo(() => data?.movements.find((movement) => movement.id === selectedMovementId) ?? null, [data, selectedMovementId]);
   const phase = phaseForTicker(data, loading);
@@ -85,6 +88,7 @@ export default function App() {
     const normalized = nextSymbol.toUpperCase();
     setSymbol(normalized);
     setMessages([]);
+    setFailedQuestion(null);
     setConversationId(undefined);
     if (mode === "demo" && connection === "none") {
       setError(null);
@@ -139,16 +143,19 @@ export default function App() {
 
   function navigate(page: WorkspacePage) {
     setPage(page);
+    setError(null);
+    setFailedQuestion(null);
     if (page === "home") setActiveTab("overview");
   }
 
-  async function sendQuestion(question: string) {
+  async function sendQuestion(question: string, isRetry = false) {
     if (mode !== "demo" && connection === "none") {
       setError(new ApiError("Choose demo access or add both your Exa and OpenAI API keys before asking live questions.", "credentials", 401));
       return;
     }
-    const userMessage: ChatMessage = { id: `q-${Date.now()}`, role: "user", content: question };
-    setMessages((previous) => [...previous, userMessage]);
+    if (!isRetry) setMessages((previous) => [...previous, { id: `q-${Date.now()}`, role: "user", content: question }]);
+    setError(null);
+    setFailedQuestion(null);
     setChatLoading(true);
     try {
       const response = mode === "demo"
@@ -158,6 +165,7 @@ export default function App() {
       setMessages((previous) => [...previous, { id: `a-${Date.now()}`, role: "assistant", content: response.answer, sources: response.sources, grounded: response.grounded }]);
     } catch (reason) {
       setError(reason instanceof Error ? reason : new Error("Unable to answer that question."));
+      setFailedQuestion(question);
     } finally {
       setChatLoading(false);
     }
@@ -212,7 +220,8 @@ export default function App() {
   </>;
 
   const ask = <section className="flex min-h-[590px] min-w-0 flex-1 flex-col bg-surface p-3 sm:p-5 lg:min-h-0 lg:p-6" aria-label="Ask Metrix workspace">
-    <ChatPanel messages={messages} isLoading={chatLoading} ticker={data?.ticker.symbol} onSend={sendQuestion} onNewConversation={() => { setMessages([]); setConversationId(undefined); }} onSelectMovement={(movementId) => { const movement = data?.movements.find((item) => item.id === movementId); if (movement) selectMovement(movement); }} />
+    {error && <ErrorState error={error} onRetry={() => failedQuestion ? void sendQuestion(failedQuestion, true) : setError(null)} />}
+    <ChatPanel messages={messages} isLoading={chatLoading} ticker={data?.ticker.symbol} onSend={sendQuestion} onNewConversation={() => { setMessages([]); setConversationId(undefined); setFailedQuestion(null); setError(null); }} onSelectMovement={(movementId) => { const movement = data?.movements.find((item) => item.id === movementId); if (movement) selectMovement(movement); }} />
   </section>;
 
   return <AppShell navigation={<AppNavigation active={page} onChange={navigate} />}>{page === "home" ? home : ask}</AppShell>;
