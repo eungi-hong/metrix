@@ -27,10 +27,10 @@ export function TickerSearch({ initialSymbol, onAnalyze, disabled }: {
           autoCapitalize="characters"
           spellCheck={false}
           placeholder="NVDA"
-          className="h-10 w-full rounded-xl border border-line bg-white pl-9 pr-3 text-sm font-semibold tracking-wide placeholder:font-normal placeholder:tracking-normal placeholder:text-mute"
+          className="h-10 w-full rounded-xl border border-line bg-panel pl-9 pr-3 text-sm font-semibold tracking-wide placeholder:font-normal placeholder:tracking-normal placeholder:text-mute"
         />
       </label>
-      <button disabled={disabled} className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-accent px-3 text-sm font-semibold text-white transition-colors hover:bg-[#4b45c4] disabled:cursor-not-allowed disabled:opacity-50">
+      <button disabled={disabled} className="inline-flex h-10 items-center gap-1.5 rounded-xl bg-accent px-3 text-sm font-semibold text-white transition-colors hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50">
         <Sparkles aria-hidden="true" size={15} />
         Analyze
       </button>

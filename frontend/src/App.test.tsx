@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./components/PriceChart", () => ({
@@ -17,5 +17,15 @@ describe("movement selection", () => {
     fireEvent.click(screen.getByRole("button", { name: /Jul 27, 2026/i }));
     expect(screen.getByTestId("chart-selection")).toHaveTextContent("72");
     expect(screen.getByRole("tab", { name: "News" })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("keeps Ask Metrix available without selecting a ticker on Home", () => {
+    const view = render(<App />);
+    const queries = within(view.container);
+    fireEvent.click(queries.getByRole("button", { name: "Ask Metrix" }));
+    const input = queries.getByRole("textbox", { name: "Ask Metrix" });
+    expect(input).toBeEnabled();
+    fireEvent.change(input, { target: { value: "What market themes matter this week?" } });
+    expect(queries.getByRole("button", { name: "Send question" })).toBeEnabled();
   });
 });

@@ -1,10 +1,9 @@
-export type ResearchTab = "overview" | "movements" | "news" | "ask";
+export type ResearchTab = "overview" | "movements" | "news";
 
 const tabs: { id: ResearchTab; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "movements", label: "Movements" },
   { id: "news", label: "News" },
-  { id: "ask", label: "Ask Metrix" },
 ];
 
 export function ResearchTabs({ active, onChange }: { active: ResearchTab; onChange: (tab: ResearchTab) => void }) {

@@ -2,40 +2,22 @@
 
 ## Briefly describe your process for completing the project from start to finish. Include details on assumptions made and key decisions taken / tradeoffs made for each step (if relevant).
 
-I started by researching and clarifying the technical jargon and the ambiguity in the
-instructions, because I wanted to be sure I understood what was being asked before I
-committed to any structure.
+I began by clarifying the technical jargon and the ambiguity in the instructions, then read
+up on how price movements are measured and on what yfinance returns. A fixed percentage
+threshold is not fair across stocks of different volatility, so the threshold is volatility
+adjusted, flagging a day when the absolute return is at least the larger of two percent and
+k times the rolling standard deviation, with the tested day excluded so a move cannot
+inflate its own threshold. I also used adjusted close rather than close, which folds splits
+and dividends back in so NVDA's splits do not read as crashes. On the same basis I chose Exa
+for the news layer, since semantic search suits a problem where I know the shape of the
+event but not the words the article will use for it.
 
-From there I did a short piece of research on how stock price movements are actually
-measured and on what yfinance gives you, and two things came out of it. The first is that
-a fixed percentage threshold is not a fair comparison across stocks, since a three percent
-day is routine for one company and extraordinary for another, so I made the threshold
-volatility adjusted and took the rolling standard deviation into account, flagging a day
-when the absolute return is at least the larger of two percent and k times that rolling
-standard deviation. The rolling window excludes the day being tested, because otherwise a
-large move inflates the very threshold it has to clear and quietly hides itself. The
-second is that yfinance returns both close and adjusted close, and adjusted close is the
-one that matters here, because it folds splits and dividends back into the series, so a
-four for one split reads as an ordinary day rather than as a seventy five percent collapse.
-NVDA's splits on their own would otherwise have produced several imaginary movements.
-
-I then did the same kind of research on the tools and resources the instructions
-recommended. I went with Exa for the news layer because its support for
-semantic search suits this problem, where I know the shape of the event I am looking for
-but not the words the article will use to describe it.
-
-Next came the architecture, and the decision that shaped everything downstream was
-persistence. News API calls and LLM relevance scoring calls are both slow and both cost
-money on every run, and that weighed heaviest on chat, because a chat that has to fetch and
-score before it can answer anything is a chat nobody will use. So I put an ingestion system
-in front of the whole thing, with a proper schema on Postgres, and the expensive work is
-done once at ingestion time and read back cheaply from then on. I also gave conversations
-their own identifiers, so that chat history is a stored thing rather than something held in
-memory for the lifetime of a process.
-
-With that settled I built the system with an LLM doing a lot of the typing, working in
-dependency order, starting with the data model, then the news layer, then ingestion, then
-the API, and finally chat.
+The decision that shaped everything else was persistence. News and scoring calls are slow
+and cost money on every run, and that weighed heaviest on chat, since a chat that fetches
+and scores before answering is one nobody will use, so I put an ingestion system with a
+proper Postgres schema in front of the whole thing and gave conversations their own
+identifiers. I then built it with an LLM doing much of the typing, in dependency order from
+the data model through the news layer, ingestion, the API and chat.
 
 ## Are you happy with your solution? Why or why not?
 

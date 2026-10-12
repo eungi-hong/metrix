@@ -10,10 +10,10 @@ const statusCopy: Record<TickerDetail["status"], string> = {
 };
 
 const statusClass: Record<TickerDetail["status"], string> = {
-  ready: "bg-emerald-50 text-emerald-700 ring-emerald-100",
-  refreshing: "bg-violet-50 text-violet-700 ring-violet-100",
-  ingesting: "bg-violet-50 text-violet-700 ring-violet-100",
-  failed: "bg-red-50 text-red-700 ring-red-100",
+  ready: "bg-positive-soft text-positive ring-positive/20",
+  refreshing: "bg-accent-soft text-accent ring-accent-line",
+  ingesting: "bg-accent-soft text-accent ring-accent-line",
+  failed: "bg-negative-soft text-negative ring-negative/20",
 };
 
 export function TickerHeader({ data, onRefresh, refreshing }: {
@@ -31,13 +31,13 @@ export function TickerHeader({ data, onRefresh, refreshing }: {
           <h1 className="mt-1 truncate text-xl font-semibold tracking-tight">{ticker.company_name ?? ticker.symbol}</h1>
           <p className="mt-0.5 text-sm text-mute"><span className="font-semibold text-ink">{ticker.symbol}</span>{metadata ? ` · ${metadata}` : ""}</p>
         </div>
-        <button onClick={onRefresh} disabled={refreshing} className="grid size-9 shrink-0 place-items-center rounded-lg border border-line bg-white text-mute hover:text-ink disabled:opacity-50" aria-label="Refresh stored research" title="Refresh stored research">
+        <button onClick={onRefresh} disabled={refreshing} className="grid size-9 shrink-0 place-items-center rounded-lg border border-line bg-panel text-mute transition-colors hover:bg-surface hover:text-ink disabled:opacity-50" aria-label="Refresh stored research" title="Refresh stored research">
           <RefreshCw aria-hidden="true" size={16} className={refreshing ? "status-pulse" : ""} />
         </button>
       </div>
       <div className="mt-4 flex items-center justify-between gap-2">
         <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${statusClass[data.status]}`}>
-          <span className={`size-1.5 rounded-full ${data.status === "failed" ? "bg-red-500" : data.status === "ready" ? "bg-emerald-500" : "bg-accent status-pulse"}`} />
+          <span className={`size-1.5 rounded-full ${data.status === "failed" ? "bg-negative" : data.status === "ready" ? "bg-ink" : "bg-accent status-pulse"}`} />
           {statusCopy[data.status]}
         </span>
         <time className="text-right text-[11px] text-mute" title={data.last_ingested_at ?? undefined}>Stored {timestamp(data.last_ingested_at)}</time>

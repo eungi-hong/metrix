@@ -1,7 +1,7 @@
-import { BarChart3 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ApiError, MetrixApiClient } from "./api/client";
+import { ApiError, MetrixApiClient, type ProviderKeys } from "./api/client";
 import type { ChatMessage, Job, Movement, TickerDetail } from "./api/types";
+import { AppNavigation, type WorkspacePage } from "./components/AppNavigation";
 import { AppShell } from "./components/AppShell";
 import { ApiKeySettings } from "./components/ApiKeySettings";
 import { ChatPanel } from "./components/ChatPanel";
@@ -19,22 +19,35 @@ import { demoChatResponse, readyDemo } from "./fixtures/demo";
 import { phaseForTicker } from "./state/ticker";
 
 const API_BASE_URL = import.meta.env.VITE_METRIX_API_BASE_URL ?? "http://localhost:8000";
-const KEY_STORAGE = "metrix-api-key";
+const PROVIDER_KEY_STORAGE = "metrix-provider-keys";
 
-function readSessionKey() {
-  try { return sessionStorage.getItem(KEY_STORAGE) ?? ""; } catch { return ""; }
+function readSessionProviderKeys(): ProviderKeys | null {
+  try {
+    const stored: unknown = JSON.parse(sessionStorage.getItem(PROVIDER_KEY_STORAGE) ?? "null");
+    if (typeof stored !== "object" || stored === null) return null;
+    const keys = stored as Partial<ProviderKeys>;
+    return typeof keys.exaApiKey === "string" && typeof keys.openaiApiKey === "string"
+      && keys.exaApiKey && keys.openaiApiKey
+      ? { exaApiKey: keys.exaApiKey, openaiApiKey: keys.openaiApiKey }
+      : null;
+  } catch { return null; }
 }
 
-function sourceMessage(data: TickerDetail | null, isDemo: boolean) {
+function sourceMessage(data: TickerDetail | null, isDemo: boolean, connection: "none" | "demo" | "own") {
   if (!data) return null;
-  return isDemo ? "Viewing local fixture data" : "Connected to local Metrix API";
+  if (isDemo) return "Viewing local fixture data";
+  return connection === "own" ? "Live research using your own provider keys" : "Live research using demo access";
 }
 
 export default function App() {
-  const [apiKey, setApiKey] = useState(readSessionKey);
+  const [providerKeys, setProviderKeys] = useState<ProviderKeys | null>(readSessionProviderKeys);
+  const [connection, setConnection] = useState<"none" | "demo" | "own">(
+    () => readSessionProviderKeys() ? "own" : "none",
+  );
   const [mode, setMode] = useState<"none" | "api" | "demo">("none");
   const [symbol, setSymbol] = useState("NVDA");
   const [data, setData] = useState<TickerDetail | null>(null);
+  const [page, setPage] = useState<WorkspacePage>("home");
   const [activeTab, setActiveTab] = useState<ResearchTab>("overview");
   const [selectedMovementId, setSelectedMovementId] = useState<number | null>(null);
   const [job, setJob] = useState<Job | null>(null);
@@ -46,16 +59,17 @@ export default function App() {
 
   const selectedMovement = useMemo(() => data?.movements.find((movement) => movement.id === selectedMovementId) ?? null, [data, selectedMovementId]);
   const phase = phaseForTicker(data, loading);
+  const jobId = job?.id;
 
   const fetchApiTicker = useCallback(async (nextSymbol: string, refresh = false) => {
-    if (!apiKey) {
-      setError(new ApiError("Enter an mtx_ API key in settings, or choose demo data for a local preview.", "credentials", 401));
+    if (connection === "none") {
+      setError(new ApiError("Choose demo access or add both your Exa and OpenAI API keys before running live research.", "credentials", 401));
       return;
     }
     setLoading(true);
     setError(null);
     try {
-      const result = await new MetrixApiClient(API_BASE_URL, apiKey).getTicker(nextSymbol, { refresh });
+      const result = await new MetrixApiClient(API_BASE_URL, connection === "own" ? providerKeys ?? undefined : undefined).getTicker(nextSymbol, { refresh, wait: connection === "own" });
       setData(result.data);
       setMode("api");
       setJob(result.data.job_id ? { id: result.data.job_id, kind: "ingest_ticker", status: "queued", source: "interactive", priority: 0, payload: {}, progress: null, attempts: 0, max_attempts: 3, last_error: null, run_after: "", created_at: "", locked_at: null, finished_at: null } : null);
@@ -65,29 +79,29 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [apiKey]);
+  }, [connection, providerKeys]);
 
   const analyze = useCallback((nextSymbol: string, refresh = false) => {
     const normalized = nextSymbol.toUpperCase();
     setSymbol(normalized);
     setMessages([]);
     setConversationId(undefined);
-    if (mode === "demo" && !apiKey) {
+    if (mode === "demo" && connection === "none") {
       setError(null);
       setData({ ...readyDemo, ticker: { ...readyDemo.ticker, symbol: normalized, company_name: normalized === "NVDA" ? readyDemo.ticker.company_name : `${normalized} demo research` } });
       setSelectedMovementId(readyDemo.movements[0]?.id ?? null);
       return;
     }
     void fetchApiTicker(normalized, refresh);
-  }, [apiKey, fetchApiTicker, mode]);
+  }, [connection, fetchApiTicker, mode]);
 
   useEffect(() => {
-    if (!job || mode !== "api" || !apiKey) return;
+    if (!jobId || mode !== "api" || connection !== "demo") return;
     let cancelled = false;
-    const client = new MetrixApiClient(API_BASE_URL, apiKey);
+    const client = new MetrixApiClient(API_BASE_URL);
     const poll = async () => {
       try {
-        const latest = await client.getJob(job.id);
+        const latest = await client.getJob(jobId);
         if (cancelled) return;
         setJob(latest);
         if (latest.status === "succeeded") {
@@ -105,7 +119,7 @@ export default function App() {
     void poll();
     const id = window.setInterval(() => void poll(), 3500);
     return () => { cancelled = true; window.clearInterval(id); };
-  }, [apiKey, fetchApiTicker, job, mode, symbol]);
+  }, [connection, fetchApiTicker, jobId, mode, symbol]);
 
   function useDemo() {
     setMode("demo");
@@ -114,22 +128,32 @@ export default function App() {
     setSelectedMovementId(readyDemo.movements[0]?.id ?? null);
     setError(null);
     setJob(null);
+    setConnection("none");
   }
 
   function selectMovement(movement: Movement) {
     setSelectedMovementId(movement.id);
+    setPage("home");
     setActiveTab("news");
   }
 
+  function navigate(page: WorkspacePage) {
+    setPage(page);
+    if (page === "home") setActiveTab("overview");
+  }
+
   async function sendQuestion(question: string) {
-    if (!data) return;
+    if (mode !== "demo" && connection === "none") {
+      setError(new ApiError("Choose demo access or add both your Exa and OpenAI API keys before asking live questions.", "credentials", 401));
+      return;
+    }
     const userMessage: ChatMessage = { id: `q-${Date.now()}`, role: "user", content: question };
     setMessages((previous) => [...previous, userMessage]);
     setChatLoading(true);
     try {
       const response = mode === "demo"
         ? demoChatResponse
-        : await new MetrixApiClient(API_BASE_URL, apiKey).sendChat({ ticker: data.ticker.symbol, question, conversationId });
+        : await new MetrixApiClient(API_BASE_URL, connection === "own" ? providerKeys ?? undefined : undefined).sendChat({ ticker: data?.ticker.symbol, question, conversationId });
       setConversationId(response.conversation_id);
       setMessages((previous) => [...previous, { id: `a-${Date.now()}`, role: "assistant", content: response.answer, sources: response.sources, grounded: response.grounded }]);
     } catch (reason) {
@@ -139,22 +163,29 @@ export default function App() {
     }
   }
 
-  function saveKey(key: string, persist: boolean) {
-    setApiKey(key);
-    setMode(key ? "api" : mode);
+  function saveProviderKeys(keys: ProviderKeys, persist: boolean) {
+    setProviderKeys(keys);
+    setConnection("own");
     try {
-      if (persist && key) sessionStorage.setItem(KEY_STORAGE, key);
-      else sessionStorage.removeItem(KEY_STORAGE);
+      if (persist) sessionStorage.setItem(PROVIDER_KEY_STORAGE, JSON.stringify(keys));
+      else sessionStorage.removeItem(PROVIDER_KEY_STORAGE);
     } catch { /* Browsers may deny session storage; in-memory key still works. */ }
   }
 
-  function clearKey() {
-    setApiKey("");
-    try { sessionStorage.removeItem(KEY_STORAGE); } catch { /* no storage available */ }
+  function useDemoAccess() {
+    setConnection("demo");
+    setMode("none");
+    setError(null);
+  }
+
+  function clearConnection() {
+    setProviderKeys(null);
+    setConnection("none");
+    try { sessionStorage.removeItem(PROVIDER_KEY_STORAGE); } catch { /* no storage available */ }
   }
 
   const research = <div className="flex min-h-full flex-col">
-    <div className="flex items-center justify-between px-5 pb-3 pt-5"><div className="flex items-center gap-2"><span className="grid size-8 place-items-center rounded-lg bg-accent text-white"><BarChart3 size={17} /></span><span className="text-base font-semibold tracking-tight">metrix</span></div><ApiKeySettings apiKey={apiKey} onSave={saveKey} onClear={clearKey} /></div>
+    <div id="research-workspace" className="flex items-center justify-between px-5 pb-3 pt-5"><div><p className="text-[10px] font-bold uppercase tracking-[0.15em] text-mute">Research workspace</p><h1 className="mt-1 text-base font-semibold tracking-tight">Good afternoon</h1></div><ApiKeySettings providerKeys={providerKeys} connected={connection} onSave={saveProviderKeys} onUseDemo={useDemoAccess} onClear={clearConnection} /></div>
     <div className="px-5 pb-4"><TickerSearch initialSymbol={symbol} onAnalyze={analyze} disabled={loading} /></div>
     {data ? <>
       <TickerHeader data={data} onRefresh={() => analyze(symbol, true)} refreshing={loading || phase === "processing"} />
@@ -164,13 +195,25 @@ export default function App() {
       {activeTab === "overview" && <OverviewPanel data={data} />}
       {activeTab === "movements" && <MovementsPanel movements={data.movements} selectedId={selectedMovementId} onSelect={selectMovement} />}
       {activeTab === "news" && <NewsPanel movement={selectedMovement} />}
-      {activeTab === "ask" && <ChatPanel messages={messages} isLoading={chatLoading} onSend={sendQuestion} onNewConversation={() => { setMessages([]); setConversationId(undefined); }} onSelectMovement={(movementId) => { const movement = data.movements.find((item) => item.id === movementId); if (movement) selectMovement(movement); }} />}
     </> : <>
       {error ? <ErrorState error={error} onRetry={() => analyze(symbol)} /> : <DemoDataBanner onUseDemo={useDemo} />}
-      <div className="px-5 py-6"><p className="text-sm font-semibold">Start with a stored asset</p><p className="mt-1 text-sm leading-6 text-mute">Search a ticker with your local API key, or use the explicitly labelled NVDA fixture to explore the research workspace.</p></div>
+      <div className="px-5 py-6"><p className="text-sm text-mute">Search a ticker or use demo data.</p></div>
     </>}
-    {sourceMessage(data, mode === "demo") && <p className="mt-auto border-t border-line px-5 py-3 text-[11px] text-mute">{sourceMessage(data, mode === "demo")}</p>}
+    {sourceMessage(data, mode === "demo", connection) && <p className="mt-auto border-t border-line px-5 py-3 text-[11px] text-mute">{sourceMessage(data, mode === "demo", connection)}</p>}
   </div>;
 
-  return <AppShell research={research} chart={<PriceChart data={data} selectedMovement={selectedMovement} onSelectMovement={selectMovement} />} />;
+  const home = <>
+    <aside className="scrollbar-thin w-full shrink-0 border-b border-line bg-panel lg:w-[360px] lg:overflow-y-auto lg:border-b-0 lg:border-r">
+      {research}
+    </aside>
+    <section className="flex min-h-[590px] min-w-0 flex-1 flex-col bg-surface p-3 sm:p-5 lg:min-h-0 lg:p-6" aria-label="Price research chart">
+      <PriceChart data={data} selectedMovement={selectedMovement} onSelectMovement={selectMovement} />
+    </section>
+  </>;
+
+  const ask = <section className="flex min-h-[590px] min-w-0 flex-1 flex-col bg-surface p-3 sm:p-5 lg:min-h-0 lg:p-6" aria-label="Ask Metrix workspace">
+    <ChatPanel messages={messages} isLoading={chatLoading} ticker={data?.ticker.symbol} onSend={sendQuestion} onNewConversation={() => { setMessages([]); setConversationId(undefined); }} onSelectMovement={(movementId) => { const movement = data?.movements.find((item) => item.id === movementId); if (movement) selectMovement(movement); }} />
+  </section>;
+
+  return <AppShell navigation={<AppNavigation active={page} onChange={navigate} />}>{page === "home" ? home : ask}</AppShell>;
 }

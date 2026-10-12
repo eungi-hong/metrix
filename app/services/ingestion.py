@@ -263,6 +263,7 @@ async def ingest_ticker(
     llm: LLMProvider | None = None,
     news_provider: NewsProvider | None = None,
     retry_exhausted: bool = False,
+    allow_followup_jobs: bool = True,
     progress: ProgressCallback | None = None,
 ) -> IngestResult:
     """Run the full pipeline for `symbol`. Assumes the caller holds the claim.
@@ -320,7 +321,14 @@ async def ingest_ticker(
             peers = await resolve_peers(session, ticker, llm)
             for done, movement in enumerate(budget, start=1):
                 linked = await _enrich_movement(
-                    session, ticker, movement, peers, news_provider, llm, result
+                    session,
+                    ticker,
+                    movement,
+                    peers,
+                    news_provider,
+                    llm,
+                    result,
+                    allow_followup_jobs=allow_followup_jobs,
                 )
                 result.articles_linked += linked
                 result.movements_enriched += 1
@@ -551,6 +559,8 @@ async def _enrich_movement(
     news_provider: NewsProvider,
     llm: LLMProvider,
     result: IngestResult,
+    *,
+    allow_followup_jobs: bool = True,
 ) -> int:
     """Search, score, and link news for one movement. Never raises.
 
@@ -576,7 +586,7 @@ async def _enrich_movement(
 
     if not candidates:
         # No evidence is not counter-evidence: keep any links an earlier pass made.
-        await _mark_enriched(session, movement)
+        await _mark_enriched(session, movement, allow_followup_jobs=allow_followup_jobs)
         return 0
 
     try:
@@ -612,12 +622,14 @@ async def _enrich_movement(
             linked += 1
 
     await _prune_links(session, movement, kept_articles)
-    await _mark_enriched(session, movement)
+    await _mark_enriched(session, movement, allow_followup_jobs=allow_followup_jobs)
     await session.flush()
     return linked
 
 
-async def _mark_enriched(session: AsyncSession, movement: Movement) -> None:
+async def _mark_enriched(
+    session: AsyncSession, movement: Movement, *, allow_followup_jobs: bool = True
+) -> None:
     """COMPLETE if the news window had closed when this pass ran, else PARTIAL.
 
     A PARTIAL movement gets its follow-up enqueued here, in the same
@@ -628,7 +640,7 @@ async def _mark_enriched(session: AsyncSession, movement: Movement) -> None:
     closed = now >= closes_at
     movement.news_status = NewsStatus.COMPLETE if closed else NewsStatus.PARTIAL
     movement.news_fetched_at = now
-    if not closed:
+    if not closed and allow_followup_jobs:
         await queue.enqueue(
             session,
             JobKind.ENRICH_MOVEMENT,
@@ -778,6 +790,7 @@ async def enrich_movement(
     llm: LLMProvider | None = None,
     news_provider: NewsProvider | None = None,
     retry_exhausted: bool = False,
+    allow_followup_jobs: bool = True,
 ) -> IngestResult | None:
     """Enrich one movement by id, as a standalone, repeatable unit of work.
 
@@ -807,7 +820,14 @@ async def enrich_movement(
 
     peers = await resolve_peers(session, ticker, llm)
     result.articles_linked = await _enrich_movement(
-        session, ticker, movement, peers, news_provider, llm, result
+        session,
+        ticker,
+        movement,
+        peers,
+        news_provider,
+        llm,
+        result,
+        allow_followup_jobs=allow_followup_jobs,
     )
     result.movements_enriched = 1
     await session.commit()

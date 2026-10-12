@@ -1,9 +1,9 @@
 """Outbound rate limiting: one limiter per external provider, shared by every process.
 
 The bottleneck for pre-warming is not CPU but the rate limits of Exa,
-Anthropic and Yahoo, and those limits belong to the account (or, for Yahoo,
+OpenAI and Yahoo, and those limits belong to the account (or, for Yahoo,
 the IP), not to a process. So the limits here are shared through Redis by
-the API and every worker: `EXA_MAX_RPS`, `ANTHROPIC_MAX_RPM` and
+the API and every worker: `EXA_MAX_RPS`, `OPENAI_MAX_RPM` and
 `YFINANCE_MAX_RPS` are what the whole deployment may send. Every outbound call
 goes through `await bucket(provider).acquire()` first.
 
@@ -72,13 +72,14 @@ logger = get_logger(__name__)
 SECONDS_PER_MINUTE = 60.0
 TOKEN_EPSILON = 1e-9
 KEY_PREFIX = "metrix:ratelimit:"
-PROVIDERS = ("exa", "anthropic", "yfinance")
+PROVIDERS = ("exa", "openai", "anthropic", "yfinance")
 
 
 def provider_rate(provider: str) -> float:
     """The account-wide rate for `provider`, in requests per second."""
     rates = {
         "exa": settings.exa_max_rps,
+        "openai": settings.openai_max_rpm / SECONDS_PER_MINUTE,
         "anthropic": settings.anthropic_max_rpm / SECONDS_PER_MINUTE,
         "yfinance": settings.yfinance_max_rps,
     }

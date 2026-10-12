@@ -25,6 +25,11 @@ export interface TickerResult {
   status: number;
 }
 
+export interface ProviderKeys {
+  exaApiKey: string;
+  openaiApiKey: string;
+}
+
 export function normalizeTickerResponse(payload: TickerDetail): TickerDetail {
   // The API intentionally nests evidence under its movement. Only normalise
   // optional collections so rendering never has to invent missing data.
@@ -59,7 +64,7 @@ function errorFromResponse(status: number, body: unknown, retryAfter: string | n
 export class MetrixApiClient {
   constructor(
     private readonly baseUrl: string,
-    private readonly apiKey: string,
+    private readonly providerKeys?: ProviderKeys,
   ) {}
 
   private async request<T>(path: string, init?: RequestInit): Promise<{ data: T; status: number }> {
@@ -69,7 +74,10 @@ export class MetrixApiClient {
         ...init,
         headers: {
           Accept: "application/json",
-          ...(this.apiKey ? { Authorization: `Bearer ${this.apiKey}` } : {}),
+          ...(this.providerKeys ? {
+            "X-Exa-Api-Key": this.providerKeys.exaApiKey,
+            "X-OpenAI-Api-Key": this.providerKeys.openaiApiKey,
+          } : {}),
           ...init?.headers,
         },
       });
@@ -82,9 +90,10 @@ export class MetrixApiClient {
     return { data: body as T, status: response.status };
   }
 
-  async getTicker(symbol: string, options: { refresh?: boolean } = {}): Promise<TickerResult> {
+  async getTicker(symbol: string, options: { refresh?: boolean; wait?: boolean } = {}): Promise<TickerResult> {
     const params = new URLSearchParams({ include_prices: "true", limit: "50" });
     if (options.refresh) params.set("refresh", "true");
+    if (options.wait) params.set("wait", "true");
     const result = await this.request<TickerDetail>(`/tickers/${encodeURIComponent(symbol)}?${params}`);
     return { data: normalizeTickerResponse(result.data), status: result.status };
   }
@@ -93,7 +102,7 @@ export class MetrixApiClient {
     return (await this.request<Job>(`/jobs/${jobId}`)).data;
   }
 
-  async sendChat(input: { ticker: string; question: string; conversationId?: string }): Promise<ChatResponse> {
+  async sendChat(input: { ticker?: string; question: string; conversationId?: string }): Promise<ChatResponse> {
     return (await this.request<ChatResponse>("/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

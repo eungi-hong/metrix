@@ -82,16 +82,22 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://metrix:metrix@localhost:5432/metrix"
 
     # ------------------------------------------------------------------- llm
-    llm_provider: Literal["anthropic"] = "anthropic"
-    # Pinned by the assignment brief. Newer IDs (claude-sonnet-5, claude-opus-5)
-    # are drop-in compatible with every call this app makes.
-    llm_model: str = "claude-sonnet-4-6"
+    # OpenAI is the production default. Anthropic remains supported for existing
+    # deployments while they migrate their environment variables.
+    llm_provider: Literal["openai", "anthropic"] = "openai"
+    # Keep the default inexpensive enough for the public demo. The provider
+    # seam keeps callers independent of this vendor-specific model ID.
+    llm_model: str = "gpt-4o-mini"
+    # A browser's own OpenAI key always runs on OpenAI, whatever `llm_provider`
+    # says, so it cannot borrow `llm_model` when that names another vendor's model.
+    byok_openai_model: str = "gpt-4o-mini"
     llm_max_tokens: int = 4096
     llm_timeout_seconds: float = 60.0
 
     # Vendor credentials, named for their vendor like `exa_api_key` below. The
     # knobs above are not: every provider has a model, a token cap and a
     # timeout, so naming them after one vendor is what leaked in the first place.
+    openai_api_key: str | None = None
     anthropic_api_key: str | None = None
 
     # ------------------------------------------------------------------ news
@@ -389,6 +395,11 @@ class Settings(BaseSettings):
         default=5.0,
         gt=0,
         description="Exa requests per second, across every process: the account's limit.",
+    )
+    openai_max_rpm: float = Field(
+        default=50.0,
+        gt=0,
+        description="OpenAI requests per minute, across every process: the account's limit.",
     )
     anthropic_max_rpm: float = Field(
         default=50.0,

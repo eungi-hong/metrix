@@ -51,7 +51,7 @@ money, so check in each time.
 - `docker-entrypoint.sh` runs `alembic upgrade head` in every container unless
   `SKIP_MIGRATIONS` is set. The worker sets it in compose.
 - Every worker process runs the nightly scheduler, deduplicated in the database. Rate
-  limits (`EXA_MAX_RPS`, `ANTHROPIC_MAX_RPM`) are **per process**.
+  limits (`EXA_MAX_RPS`, `OPENAI_MAX_RPM`) are **per process**.
 - CORS is an exact-origin allow-list (`CORS_ALLOWED_ORIGINS`) with methods GET, POST and
   OPTIONS only.
 - The frontend reads `VITE_METRIX_API_BASE_URL` **at build time** and defaults to
@@ -194,7 +194,7 @@ You can't click dashboards, and I will enter every secret myself. So:
    **Never ask me to paste a secret into this conversation. Never write a secret to a
    file, a commit, a command line or a log.** For generated secrets like `ADMIN_TOKEN`,
    give me a command I run myself (for example `openssl rand -hex 32`).
-3. Remind me to set monthly spend limits in the Anthropic and Exa consoles, as a backstop
+3. Remind me to set monthly spend limits in the OpenAI and Exa consoles, as a backstop
    that doesn't depend on our code.
 4. Wait until I tell you both deploys are green, then stop.
 

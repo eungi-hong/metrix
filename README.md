@@ -18,8 +18,8 @@ GET    /admin/usage            the day's spend, by provider, operation and user
 GET    /admin/request-info     the peer and X-Forwarded-For as received, to set TRUSTED_PROXY_COUNT
 ```
 
-Everything except `/health` needs a key: `Authorization: Bearer mtx_...` for the API,
-`X-Admin-Token` for `/admin`. See [Authentication](#authentication).
+The public browser demo uses an Exa + OpenAI provider-key pair or capped server-side
+demo access. `/admin` always requires `X-Admin-Token`. See [Authentication](#authentication).
 
 ---
 
@@ -47,14 +47,10 @@ How it is deployed, how a merge to `main` reaches it, and the kill switch:
 git clone https://github.com/eungi-hong/metrix.git && cd metrix
 cp .env.example .env          # then add your two API keys (below)
 docker compose up --build     # Postgres + migrations + API + worker
-
-# Every call needs a Metrix API key. Create a user and one:
-docker compose exec api python scripts/create_api_key.py --name "You" --plan pro
-export METRIX_API_KEY=mtx_...  # the key it printed; it is shown only once
 ```
 
 The API is on <http://localhost:8000>, interactive docs at <http://localhost:8000/docs>
-(use **Authorize** there to paste the key).
+(use **Authorize** only if you enable the optional internal `mtx_` authentication).
 
 ### Frontend workspace
 
@@ -70,8 +66,10 @@ npm install
 npm run dev
 ```
 
-Open <http://localhost:5173>. Enter an `mtx_…` API key using the API-key control; it
-is kept in memory unless you explicitly choose session-only storage. The initial
+Open <http://localhost:5173>. Choose **Use demo access** to use the capped server-side
+Exa and OpenAI keys, or enter your own pair in the connection control. Browser-supplied
+keys are sent only with the current request, are never saved by Metrix or a background
+job, and are only retained in `sessionStorage` if you explicitly opt in. The initial
 screen also offers **View demo data**, which is clearly labelled local fixture data
 rather than API data. For a production check, run `npm run typecheck`, `npm run lint`,
 `npm test`, and `npm run build` from `frontend/`.
@@ -88,20 +86,26 @@ wildcard origin.
 
 | Variable | Required | Where to get it |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | Yes | <https://console.anthropic.com/settings/keys> |
+| `OPENAI_API_KEY` | Yes | <https://platform.openai.com/api-keys> |
 | `EXA_API_KEY` | Yes (or use `NEWS_PROVIDER=fixture`) | <https://dashboard.exa.ai/api-keys> |
 
 Without an Exa key, set `NEWS_PROVIDER=fixture` to run the entire pipeline offline
-against deterministic synthetic articles. Without an Anthropic key the price and
+against deterministic synthetic articles. Without an OpenAI key the price and
 movement-detection half still works — movements come back with
 `news_status: "failed"` and a warning explaining why, rather than a 500.
 
 ### Authentication
 
-`/tickers`, `/chat`, `/jobs` and `/conversations` need an API key, sent as
-`Authorization: Bearer mtx_...`; `/health` is open, and `/admin` uses `X-Admin-Token`.
-A missing, unknown or revoked key, or one whose user is disabled, gets `401`. Keys are
-shown once, when created, and only their SHA-256 is stored.
+For the public demo, set `AUTH_REQUIRED=false`: `/tickers` and `/chat` identify a
+visitor by IP and accept either no provider-key headers (the server-side demo pair) or
+a paired `X-Exa-Api-Key` and `X-OpenAI-Api-Key` for browser BYOK mode. A supplied pair
+is valid only with `wait=true`, so it cannot be copied into a job queue or persisted.
+Never put provider keys in a Vite environment file.
+
+Internal deployments can set `AUTH_REQUIRED=true`; then `/tickers`, `/chat`, `/jobs`
+and `/conversations` additionally need `Authorization: Bearer mtx_...`. `/health` is
+open, and `/admin` uses `X-Admin-Token`. Internal keys are shown once when created and
+only their SHA-256 is stored.
 
 Get the first key with `scripts/create_api_key.py` (above), which writes straight to
 the database. After that, with `ADMIN_TOKEN` set, keys and users are managed over the
