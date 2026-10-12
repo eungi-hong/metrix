@@ -143,7 +143,7 @@ async def get_ticker_detail(
             principal,
             refresh=refresh,
             wait=wait,
-            force_inline=provider_credentials.supplied_by_user,
+            caller_pays=provider_credentials.supplied_by_user,
         )
     except RateLimited:
         raise  # a refused request is not demand
@@ -300,14 +300,17 @@ async def _inline_slot() -> AsyncIterator[None]:
         yield
 
 
-async def _charge(principal: Principal, quota: Quota, *, has_data: bool) -> str | None:
-    """Charge `quota` for new work. None if charged.
+async def _charge(principal: Principal, quota: Quota | None, *, has_data: bool) -> str | None:
+    """Charge `quota` for new work. None if charged, or if there is no quota
+    to charge because the caller pays with their own provider keys.
 
     Refused, it raises `RateLimited` (429) when there is nothing stored to
     show, or when the caller explicitly asked for a refresh. Otherwise, for a
     stale ticker or news still owed, it returns a warning and the caller
     serves what is stored: the data is still worth more than a 429.
     """
+    if quota is None:
+        return None
     try:
         await quotas.charge(principal, quota)
     except RateLimited as exc:
@@ -315,6 +318,11 @@ async def _charge(principal: Principal, quota: Quota, *, has_data: bool) -> str 
             return f"Showing stored data; nothing new was fetched: {exc}"
         raise
     return None
+
+
+async def _refund(principal: Principal, quota: Quota | None) -> None:
+    if quota is not None:
+        await quotas.refund(principal, quota)
 
 
 async def _ensure_data(
@@ -327,13 +335,17 @@ async def _ensure_data(
     *,
     refresh: bool,
     wait: bool,
-    force_inline: bool = False,
+    caller_pays: bool = False,
 ) -> _Ensured:
     """Fetch-if-missing / fetch-if-stale. Returns the state to report.
 
     New work is charged to the caller's quota: `refresh_per_day` for an
     explicit refresh of stored data, `cold_ingests_per_day` otherwise. A
     request that joins work already queued is not charged.
+
+    `caller_pays` is a request with the caller's own provider keys: it runs
+    inline, never leaves work for a job that would need the key, and is
+    charged no quota, since it spends nothing of ours.
     """
     has_data = ticker is not None and ticker.last_ingested_at is not None
     busy: IngestState = "refreshing" if has_data else "ingesting"
@@ -350,7 +362,7 @@ async def _ensure_data(
                 f"is available again in {math.ceil((cooldown - since).total_seconds() / 60)} "
                 "minute(s). Showing stored data."
             )
-    if wait and not force_inline and not quotas.limits_for(principal).allow_wait:
+    if wait and not caller_pays and not quotas.limits_for(principal).allow_wait:
         wait = False
         warnings.append(_NO_WAIT_ON_PLAN.format(plan=principal.plan.value))
 
@@ -362,7 +374,7 @@ async def _ensure_data(
             news_provider,
             principal,
             wait=wait,
-            allow_followup_jobs=not force_inline,
+            caller_pays=caller_pays,
         )
         ensured.warnings[:0] = warnings
         return ensured
@@ -388,14 +400,18 @@ async def _ensure_data(
         return _Ensured(busy, _ALREADY_RUNNING, job.id, warnings=warnings)
 
     target = ticker or await ingestion.get_or_create_ticker(session, symbol)
-    quota = Quota.REFRESH_PER_DAY if refresh and has_data else Quota.COLD_INGESTS_PER_DAY
+    quota: Quota | None = (
+        None
+        if caller_pays
+        else Quota.REFRESH_PER_DAY if refresh and has_data else Quota.COLD_INGESTS_PER_DAY
+    )
 
     if wait:
         async with _inline_slot():
             if (refused := await _charge(principal, quota, has_data=has_data)) is not None:
                 return _Ensured("ready", warnings=[*warnings, refused])
             if not await ingestion.claim_ingestion(session, target):
-                await quotas.refund(principal, quota)
+                await _refund(principal, quota)
                 return _Ensured(busy, _ALREADY_RUNNING, warnings=warnings)
             try:
                 result = await ingestion.ingest_ticker(
@@ -404,16 +420,16 @@ async def _ensure_data(
                     llm=llm,
                     news_provider=news_provider,
                     retry_exhausted=refresh,
-                    allow_followup_jobs=not force_inline,
+                    allow_followup_jobs=not caller_pays,
                 )
             except (UpstreamError, ProviderBusy):
-                await quotas.refund(principal, quota)  # our outage, not their request
+                await _refund(principal, quota)  # our outage, not their request
                 raise
         # A run whose news had to wait (the spend cap, a busy provider) still
         # stores the prices and returns normally; its warnings say which news
         # was not fetched, and the quota is returned.
         if result.deferred is not None:
-            await quotas.refund(principal, quota)
+            await _refund(principal, quota)
         return _Ensured("ready", warnings=[*warnings, *result.warnings])
 
     # The worker takes the ticker claim when it runs the job, not here: a job
@@ -437,7 +453,7 @@ async def _ensure_data(
     )
     await session.commit()
     if charged and not created:  # another request queued it a moment ago
-        await quotas.refund(principal, quota)
+        await _refund(principal, quota)
 
     if has_data:
         return _Ensured(
@@ -465,7 +481,7 @@ async def _enrich_what_is_owed(
     principal: Principal,
     *,
     wait: bool,
-    allow_followup_jobs: bool = True,
+    caller_pays: bool = False,
 ) -> _Ensured:
     """Fresh prices, but maybe movements still owed news.
 
@@ -477,14 +493,15 @@ async def _enrich_what_is_owed(
 
     It is real news and LLM work, so a request that starts any of it is
     charged one `cold_ingests_per_day`, however many movements it covers. One
-    that only pulls already-queued jobs forward is free.
+    that only pulls already-queued jobs forward is free. So is one where
+    `caller_pays`, which also never leaves follow-up jobs.
     """
     owed = await ingestion.enrichable_movements(
         session, ticker, limit=settings.max_movements_per_ingest
     )
     if not owed:
         return _Ensured("ready")
-    quota = Quota.COLD_INGESTS_PER_DAY
+    quota = None if caller_pays else Quota.COLD_INGESTS_PER_DAY
 
     if wait:
         async with _inline_slot():
@@ -498,14 +515,14 @@ async def _enrich_what_is_owed(
                         movement.id,
                         llm=llm,
                         news_provider=news_provider,
-                        allow_followup_jobs=allow_followup_jobs,
+                        allow_followup_jobs=not caller_pays,
                     )
                 except MetrixError as exc:
                     warnings.append(f"{movement.date}: {exc}")
                 except WorkDeferred as exc:
                     # Serve what is stored; the remaining movements stay as they were.
                     await session.rollback()
-                    await quotas.refund(principal, quota)
+                    await _refund(principal, quota)
                     warnings.append(f"News not fetched: {exc}")
                     break
         return _Ensured("ready", warnings=warnings)

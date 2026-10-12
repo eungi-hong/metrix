@@ -386,12 +386,28 @@ async def reserve(provider: str, operation: str, estimate: Decimal) -> Reservati
 
 
 @asynccontextmanager
-async def metered(provider: str, operation: str, estimate: Decimal) -> AsyncIterator[Reservation]:
+async def metered(
+    provider: str, operation: str, estimate: Decimal, *, caller_pays: bool = False
+) -> AsyncIterator[Reservation]:
     """Reserve, run the body, and release the reservation unless it was settled.
 
     A body that raises (the call failed) releases it. So does one that
     returns without settling, which is a bug in the seam and is logged.
+
+    `caller_pays` is a call made with the caller's own provider key: it is
+    not our money, so it is neither capped nor recorded. The reservation it
+    yields is already done, so settling or releasing it does nothing.
     """
+    if caller_pays:
+        yield Reservation(
+            provider=provider,
+            operation=operation,
+            estimate=estimate,
+            day=utc_day(_now()),
+            attribution=context.current(),
+            done=True,
+        )
+        return
     reservation = await reserve(provider, operation, estimate)
     try:
         yield reservation

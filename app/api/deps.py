@@ -84,7 +84,9 @@ async def request_llm(
         yield configured_client
         return
     model = settings.llm_model if settings.llm_provider == "openai" else settings.byok_openai_model
-    client = build_llm_client("openai", api_key=credentials.openai_api_key, model=model)
+    client = build_llm_client(
+        "openai", api_key=credentials.openai_api_key, model=model, caller_pays=True
+    )
     try:
         yield client
     finally:
@@ -95,7 +97,11 @@ async def request_news_provider(
     session: SessionDep, credentials: ProviderCredentialsDep
 ) -> AsyncIterator[NewsProvider]:
     """Use a browser's Exa key only for inline work in this request."""
-    provider = build_news_provider(session, api_key=credentials.exa_api_key)
+    provider = build_news_provider(
+        session,
+        api_key=credentials.exa_api_key,
+        caller_pays=credentials.supplied_by_user,
+    )
     try:
         yield provider
     finally:

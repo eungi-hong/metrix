@@ -14,7 +14,11 @@ _PROVIDERS: dict[str, type[LLMProvider]] = {
 
 
 def build_llm_client(
-    provider_name: str | None = None, *, api_key: str | None = None, model: str | None = None
+    provider_name: str | None = None,
+    *,
+    api_key: str | None = None,
+    model: str | None = None,
+    caller_pays: bool = False,
 ) -> LLMProvider:
     """Build the configured provider, optionally with a request-scoped key."""
     name = (provider_name or settings.llm_provider).lower()
@@ -22,7 +26,7 @@ def build_llm_client(
         provider_cls = _PROVIDERS[name]
     except KeyError:  # pragma: no cover - guarded by pydantic Literal
         raise ValueError(f"Unknown LLM provider '{name}'") from None
-    return provider_cls(api_key=api_key, model=model)
+    return provider_cls(api_key=api_key, model=model, caller_pays=caller_pays)
 
 
 _default_client: LLMProvider | None = None
