@@ -185,7 +185,7 @@ export default function App() {
   }
 
   const research = <div className="flex min-h-full flex-col">
-    <div id="research-workspace" className="flex items-center justify-between px-5 pb-3 pt-5"><div><p className="text-[10px] font-bold uppercase tracking-[0.15em] text-mute">Research workspace</p><h1 className="mt-1 text-base font-semibold tracking-tight">Good afternoon</h1></div><ApiKeySettings providerKeys={providerKeys} connected={connection} onSave={saveProviderKeys} onUseDemo={useDemoAccess} onClear={clearConnection} /></div>
+    <div id="research-workspace" className="flex items-center justify-between px-5 pb-3 pt-5"><div><p className="text-[10px] font-bold uppercase tracking-[0.15em] text-mute">Research workspace</p></div><ApiKeySettings providerKeys={providerKeys} connected={connection} onSave={saveProviderKeys} onUseDemo={useDemoAccess} onClear={clearConnection} /></div>
     <div className="px-5 pb-4"><TickerSearch initialSymbol={symbol} onAnalyze={analyze} disabled={loading} /></div>
     {data ? <>
       <TickerHeader data={data} onRefresh={() => analyze(symbol, true)} refreshing={loading || phase === "processing"} />

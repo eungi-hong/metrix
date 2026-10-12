@@ -25,7 +25,7 @@ demo access. `/admin` always requires `X-Admin-Token`. See [Authentication](#aut
 
 ## Live demo
 
-**<https://LIVE-DEMO-URL-PENDING>** (the frontend; the API it calls is on Railway)
+**<https://metrix-jet.vercel.app/>** (the frontend; the API it calls is on Railway)
 
 - Open the link and enter the demo key under the key icon. The key is shared with
   reviewers alongside the submission, never in this repository. Without one, **View
