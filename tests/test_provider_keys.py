@@ -172,7 +172,11 @@ async def test_openai_seam_uses_structured_output_and_records_usage(ledger, monk
 
 @pytest.mark.parametrize(
     ("code", "blocked", "message"),
-    [("insufficient_quota", False, "out of credit"), ("rate_limit_exceeded", True, "rate limited")],
+    [
+        ("insufficient_quota", False, "out of credit"),
+        ("credit_balance_exhausted", False, "out of credit"),
+        ("rate_limit_exceeded", True, "rate limited"),
+    ],
 )
 async def test_an_empty_openai_balance_is_not_a_rate_limit(monkeypatch, code, blocked, message):
     """Both arrive as 429; only the real rate limit should pause other callers."""
