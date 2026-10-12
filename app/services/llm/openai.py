@@ -208,6 +208,10 @@ def _tokens(usage: Any, name: str) -> int:
     return value if isinstance(value, int) else 0
 
 
+# Prepaid accounts that have spent their credit report the second code.
+_OUT_OF_CREDIT_CODES = frozenset({"insufficient_quota", "credit_balance_exhausted"})
+
+
 def _out_of_quota(exc: openai.APIError) -> bool:
     """OpenAI answers 429 both for going too fast and for an empty balance."""
-    return isinstance(exc, openai.RateLimitError) and exc.code == "insufficient_quota"
+    return isinstance(exc, openai.RateLimitError) and exc.code in _OUT_OF_CREDIT_CODES
