@@ -108,7 +108,8 @@ request fails.
 
 ### Results
 
-Five runs on 2026-10-18 between 09:29 and 09:38 UTC, at commit `ac9d3e8`, on a
+Five runs on 2026-10-18 between 09:29 and 09:38 UTC, at commit `ac9d3e8` (rebased
+onto `c6498af` since, as `ad0e54f`; the benchmark script is byte for byte the same), on a
 2-vCPU Intel Xeon (2.80 GHz) cloud VM shared by the client, the API, Postgres and
 Redis. Median of the five runs, with the range in brackets:
 

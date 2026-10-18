@@ -142,18 +142,22 @@ async def test_the_sql_and_python_enrichment_rules_agree(session, monkeypatch):
         detector_k=2, detector_window=20, detector_floor=0.02,
     )
     cases = [
-        (NewsStatus.PENDING, 0, now + timedelta(days=1)),
-        (NewsStatus.COMPLETE, 1, now - timedelta(days=1)),
-        (NewsStatus.PARTIAL, 1, now + timedelta(hours=1)),
-        (NewsStatus.PARTIAL, 1, now - timedelta(hours=1)),
-        (NewsStatus.FAILED, 2, now - timedelta(days=1)),
-        (NewsStatus.FAILED, 3, now - timedelta(days=1)),
+        (NewsStatus.PENDING, 0, now + timedelta(days=1), True),
+        (NewsStatus.COMPLETE, 1, now - timedelta(days=1), True),
+        (NewsStatus.PARTIAL, 1, now + timedelta(hours=1), True),
+        (NewsStatus.PARTIAL, 1, now - timedelta(hours=1), True),
+        (NewsStatus.FAILED, 2, now - timedelta(days=1), True),
+        (NewsStatus.FAILED, 3, now - timedelta(days=1), True),
+        # Kept only because they were paid for (qualifies false): never owed.
+        (NewsStatus.PENDING, 0, now + timedelta(days=1), False),
+        (NewsStatus.FAILED, 2, now - timedelta(days=1), False),
     ]
-    for i, (status, attempts, closes) in enumerate(cases):
+    for i, (status, attempts, closes, qualifies) in enumerate(cases):
         session.add(
             Movement(
                 **base, date=date(2026, 1, 1) + timedelta(days=i),
                 news_status=status, news_attempts=attempts, news_window_closes_at=closes,
+                qualifies=qualifies,
             )
         )
     await session.commit()

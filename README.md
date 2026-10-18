@@ -282,6 +282,12 @@ second flat list you have to join:
 | `direction` | `up` or `down` |
 | `tier` | `easy`, `medium`, `hard`. Repeat for several. Restricts both which movements are returned and which articles are shown under them |
 | `include_prices` | Include the daily OHLCV bars themselves, not just the summary. Honours `start`/`end`. Off by default — a year is ~250 rows most callers don't need |
+| `trigger` | `raw`, `abnormal`, `both`: which detection test flagged the movement. Repeat for several |
+| `dominant` | `market`, `sector`, `company`: the movement's largest component |
+| `min_sar` | Only movements whose standardised abnormal return is at least this large, either sign |
+| `sort` | `date` (default), `abs_return`, `abs_sar` or `rvol`, largest first |
+| `include_benchmarks` | Also return SPY and the sector benchmark rebased to 100, for a chart overlay |
+| `include_unqualified` | Also return movements that no longer qualify but were kept for their research |
 | `limit`, `offset` | Pagination over movements (`total` is the unpaginated count) |
 | `refresh` | Force re-ingestion even if data is fresh |
 | `wait` | Run any needed ingestion inline instead of queueing it for the worker |
@@ -455,6 +461,8 @@ scripts/show.py DHI --json | jq   # raw payload passthrough
 
 ## How a movement is defined
 
+### The raw rule (v1, unchanged)
+
 A trading day is a **major movement** when
 
 ```
@@ -469,11 +477,11 @@ A trading day is a **major movement** when
   All three are environment variables, and the values in force are stored on every
   movement row and returned in the API response.
 
-**Why both terms.** A flat 2% rule is wrong in both directions. On NVDA it flags 95 of
-251 trading days — 38% of the year, which is not a useful definition of "major". On a
-quiet utility the same 2% may be a genuine three-sigma event. The volatility term
-adapts the bar to each stock's own regime; the floor stops a very low-volatility name
-from being flagged on noise when 2σ is a few basis points. Measured over the last year:
+**Why both terms.** A flat 2% rule is wrong in both directions: on a volatile name it
+flags a large share of the year, and on a quiet utility the same 2% may be a genuine
+three-sigma event. The volatility term adapts the bar to each stock's own regime; the
+floor stops a very low-volatility name from being flagged on noise when 2 sigma is a
+few basis points.
 
 | Ticker | Trading days | Flagged by flat 2% | Flagged by `max(2%, 2σ)` |
 |---|---|---|---|
@@ -481,15 +489,142 @@ from being flagged on noise when 2σ is a few basis points. Measured over the la
 | KO | 251 | 22 | **15** |
 | JNJ | 251 | 28 | **15** |
 
+*Measured by hand for v1; no script in the repository reproduces it. It will be
+replaced by the output of `python scripts/measure_detection.py --symbols NVDA,KO,JNJ`,
+which also counts the abnormal and union modes below. That command needs yfinance,
+which the environment that wrote v2 Phase 1 could not reach.*
+
 **The window excludes the day being tested.** Including it would let a large move
-inflate its own threshold and mask itself — a lookahead bias that makes the most
+inflate its own threshold and mask itself, a lookahead bias that makes the most
 interesting days the least likely to be flagged. Every threshold is computable from
 information available at the prior close, and there is a test asserting exactly that
 (`test_threshold_is_computable_from_information_available_at_the_prior_close`).
 
 **It is auditable.** Each movement stores `rolling_std`, `threshold`,
-`threshold_source` (`floor` or `volatility`), and the `k`/window/floor used. You can
-see not just that a day was flagged, but which term of the `max()` decided it.
+`threshold_source` (`floor` or `volatility`), and the `k`/window/floor used.
+
+### Return decomposition: market, sector, company
+
+A stock that fell 4% on a day its sector fell 4% did not have 4% of news of its own.
+Every movement is split into parts with a market model and an orthogonalised sector
+factor (`app/services/decomposition.py`), estimated by OLS on the
+`DECOMPOSITION_ESTIMATION_SESSIONS` (120) sessions that **end the session before the
+move**, the same no-lookahead rule as the detector:
+
+```
+sector residual   r_s = a + b * r_m + u,             s_perp = r_s - (a + b * r_m)
+stock model       r_i = alpha + beta_m * r_m + beta_s * s_perp + e,   sigma_e on n - 3 d.f.
+
+on the move's day T
+  market   = beta_m * r_m,T
+  sector   = beta_s * s_perp,T
+  abnormal = r_i,T - (alpha + market + sector)          so alpha + market + sector + abnormal = r_i,T exactly
+  SAR      = abnormal / (sigma_e * sqrt(1 + x_T' (X'X)^-1 x_T)),   x_T = [1, r_m,T, s_perp,T]
+```
+
+Orthogonalising the sector factor is what makes the split well defined: without it the
+market and sector betas share the market's variance. The SAR uses the forecast-error
+(Patell) variance, so a day whose market move is far outside the window is not
+over-weighted. `dominant` is the largest of market, sector and company (abnormal).
+
+- **Benchmarks.** The market is `SPY`. The sector comes from the ticker's yfinance
+  profile: its industry if `BENCHMARK_INDUSTRY_MAP_JSON` has it (Semiconductors to
+  SMH, Biotechnology to XBI, Banks - Regional to KRE, Residential Construction to ITB),
+  else its sector through `BENCHMARK_SECTOR_MAP_JSON` (the SPDR Select Sector ETFs).
+  **The map is provisional**: its keys are the strings the v2 brief lists, not yet
+  checked against real yfinance responses. `tests/test_benchmarks.py` fails on any real
+  profile string the map misses once `tests/fixtures/yfinance_profiles.json` is added
+  (`scripts/measure_detection.py --profiles-out` writes it). An unmapped sector gets a
+  market-only model, and the movement says so.
+- **Self-inclusion.** A sector ETF holds the stocks it benchmarks: NVDA is a large
+  weight in XLK and SMH, so part of NVDA's own move is inside its "sector" factor, which
+  understates NVDA's company component on its biggest days. The map is configuration
+  so an equal-weight sector ETF can be used for any sector instead.
+- **Contaminated windows.** Earlier shocks inflate `sigma_e` and would hide the next
+  one, so each estimation series is winsorised at `DECOMPOSITION_WINSOR_Z` (5) robust
+  standard deviations (median plus or minus z times 1.4826 times the MAD). Every
+  series is clipped, the market included, so a crash day is not clipped in the stock
+  alone, which would invent a residual. A test shows the effect.
+- **History.** Full fetches reach `PRICE_ESTIMATION_EXTRA_DAYS` (200) calendar days
+  before the display window (`PRICE_HISTORY_DAYS`, 365), and movements are only
+  flagged, and so enriched, inside the display window, so enrichment cost does not grow.
+- **Benchmarks are data, not products.** The nightly run fetches them in its first
+  price batch and stores them like any ticker's prices; they are not ranked by demand
+  or enriched. The other price chunks wait for that batch.
+- **Fallbacks.** Fewer than `DECOMPOSITION_MIN_SESSIONS` (60) sessions, a missing
+  benchmark bar on the move or the session before it, or a ticker that is itself a
+  benchmark: the day is judged by the raw rule alone, with the reason in
+  `decomposition_warning`.
+- **Fat tails.** Daily returns are fat-tailed. A sigma multiple or a SAR is a size in
+  standard deviations, a heuristic for "unusual", never a p-value.
+
+### Detection modes
+
+`MOVEMENT_DETECTION_MODE` chooses which days are movements (`app/services/detection.py`):
+
+| Mode | A day is a movement when |
+|---|---|
+| `raw` (default) | the raw rule above, byte for byte the v1 detector |
+| `abnormal` | `|SAR| >= MOVEMENT_ABNORMAL_K` (2.5) and the return clears the floor |
+| `union` | either |
+
+Every movement records its `trigger`: `raw`, `abnormal` or `both`, whatever the mode,
+so the audit trail shows which test it passed. **Raw stays the default for now.** Union
+can only add movements, and each new movement is enrichment spend, so the switch waits
+for `scripts/measure_detection.py` to count the extra movements and their nightly cost
+on real prices, for the five production seeds and the 40-symbol seed file.
+
+One open question goes with that decision. The rule above floors the day's return, but
+then a stock that was flat on a day its sector fell 4% can never be flagged, since its
+return is below the floor. `MOVEMENT_ABNORMAL_FLOOR_BASIS=abnormal` floors the abnormal
+return instead, which does flag it; the script counts both.
+
+**Nothing paid for is deleted.** When a stored movement stops qualifying (revised
+prices, retuned parameters, another mode), it is kept with `qualifies = false` if it has
+news links or a finished enrichment, and deleted only if it has neither. A link a later
+scoring pass no longer supports is marked `superseded_at` rather than deleted. Both are
+hidden from the API (`include_unqualified=true` shows such movements) and from chat, and
+come back if they qualify again.
+
+### When the news broke: session timing
+
+News timing is in New York Stock Exchange sessions (`app/services/sessions.py`, the
+`exchange_calendars` XNYS calendar, with holidays, early closes and both DST changes),
+not calendar days. For a movement on session T, with previous session P and next
+session N, every linked article gets a `timing`:
+
+| Bucket | Published | Can cause T's close-to-close move? |
+|---|---|---|
+| `before_prior_close` | at or before close(P) | weakly, mostly priced in at P |
+| `overnight` | after close(P), before open(T) | yes, explains the opening gap |
+| `intraday` | open(T) to close(T) | yes, explains the intraday leg |
+| `after_close` | after close(T), before open(N) | no: a recap, or a cause of N |
+| `later` | from open(N) | no |
+
+An article with only a date gets `timing_precision = "day"` and a bucket only when the
+whole New York day falls inside one. `NEWS_WINDOW_MODE=sessions` also searches for news
+in sessions (`NEWS_WINDOW_SESSIONS_BEFORE` and `_AFTER`), so a Friday move's window
+runs through Monday instead of stopping on Saturday. It is off by default because it
+changes the news search requests and so their cache keys; a movement keeps the window
+it was first searched with.
+
+### What else each movement carries
+
+All from stored daily bars, no new vendor (`app/services/analytics.py`):
+
+- **Legs.** `gap = O_T * (adj_close_T / close_T) / adj_close_P - 1` and
+  `intraday = close_T / O_T - 1`, so `(1 + gap) * (1 + intraday) = 1 + r`.
+- **Relative volume.** The day's volume over the median of the 20 sessions before it.
+- **Drift.** Cumulative abnormal return over T+1..T+5 and T+1..T+20 with the model
+  fixed at T, labelled `continued` or `reversed` when it has the same or the opposite
+  sign as T's abnormal return and is at least half its size, `held` otherwise. Null
+  until those sessions exist; the nightly refresh fills it in.
+- **Volatility regime.** Annualised realised volatility of the 20 returns before T,
+  and its percentile against the same measure over the past year.
+
+A queued `backfill_analytics` job (`POST /admin/backfill-analytics` queues one per
+stored ticker) computes all of this for movements stored before v2, without any news
+or LLM call.
 
 ---
 
@@ -744,6 +879,14 @@ No Docker, no network, no API keys.
 - `tests/test_symbols.py` — the directory parser against samples cut from the real
   files, `BRK.B` ↔ `BRK-B`, refreshes that never empty or gut the table, enforce, warn
   and off, demand that one caller cannot inflate, and the refresh cooldown.
+- `tests/test_sessions.py`, `tests/test_decomposition.py`, `tests/test_analytics.py`,
+  `tests/test_detection.py`, `tests/test_benchmarks.py`: the finance core on the real
+  XNYS calendar (early close, holiday Monday, both DST changes, Friday to Monday) and on
+  synthetic data with known parameters (parameter recovery, exact additivity, the
+  Patell SAR, no lookahead, winsorisation, every detection mode).
+- `tests/test_finance_ingestion.py`, `tests/test_finance_api.py`: the same wired into
+  ingestion, the nightly run, the backfill, the API and chat, including paid work kept
+  rather than deleted.
 - `tests/test_show_cli.py` — the renderer's citation parsing, colour gating, and
   sparkline edge cases.
 
@@ -770,10 +913,13 @@ TEST_REDIS_URL=redis://localhost:6380/15 pytest
 
 ## Known limitations
 
-- **Movement detection is univariate.** It does not separate a stock's own move from
-  its sector's or the market's. A beta-adjusted or residual-return definition would
-  distinguish "NVDA fell because NVDA" from "NVDA fell because everything fell", which
-  is exactly the distinction the Hard tier is trying to make downstream.
+- **The default detector is still univariate.** The decomposition separates a stock's
+  own move from its sector's and the market's on every movement, but the default mode
+  stays `raw` until union's extra cost is measured on real prices (see "Detection
+  modes").
+- **Sector benchmarks include the stock.** A sector ETF's own constituents leak into
+  the sector factor; configurable, not solved. And the benchmark map is provisional
+  until checked against real yfinance profile strings.
 - **Article bodies are whatever Exa returns** — usually a summary or the first ~2k
   characters, sometimes paywalled boilerplate. Scoring quality is bounded by that.
 - **Rate limits are only as shared as Redis is up.** While Redis is unreachable each

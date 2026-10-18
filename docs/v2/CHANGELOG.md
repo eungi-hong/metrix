@@ -3,6 +3,31 @@
 One entry per phase, newest first. Each phase ships on its own branch
 (`v2/<phase>-<slug>`) and pull request.
 
+## Phase 1: finance core (`v2/1-finance-core`)
+
+Additive; no default changes what is stored or spent.
+
+- Session timing (`app/services/sessions.py`, `exchange_calendars` XNYS): every new
+  link gets `timing` (before_prior_close, overnight, intraday, after_close, later) and
+  `timing_precision`; an opt-in news window in sessions (`NEWS_WINDOW_MODE`).
+- Return decomposition (`app/services/decomposition.py`): market model with an
+  orthogonalised sector factor, Patell SAR, winsorised estimation window; benchmark map
+  in config, provisional until checked against real yfinance strings.
+- Detection modes (`app/services/detection.py`): `raw` (default, the v1 detector),
+  `abnormal`, `union`, with `trigger` on every movement.
+- Paid work is never deleted: movements that stop qualifying are kept with
+  `qualifies=false` when they have links or a finished enrichment; links a re-score
+  drops are marked `superseded_at`. Both hidden from the API and chat.
+- Per-movement analytics (`app/services/analytics.py`): gap and intraday legs,
+  relative volume, post-move drift, volatility regime.
+- Nightly benchmarks in the first price batch; `backfill_analytics` job and
+  `POST /admin/backfill-analytics`.
+- API: nested `decomposition`, `legs`, `volume_analysis`, `drift`, `regime`;
+  `timing` on links; filters `trigger`, `dominant`, `min_sar`; `sort`;
+  `include_benchmarks`; `include_unqualified`.
+- `scripts/measure_detection.py`: counts per mode on real prices and union's cost.
+- Migration `c5d8e2a7f9b1`. Backend tests 604 to 700 (699 pass with Postgres and Redis; 1 skipped until real yfinance profiles are added).
+
 ## Phase 0: audit and baseline (`v2/0-audit-baseline`)
 
 No application code changed. Added the tooling and the record that later phases
