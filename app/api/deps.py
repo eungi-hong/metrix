@@ -19,18 +19,19 @@ from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.core.config import settings
 from app.core.context import current_user_id
 from app.core.errors import ConfigurationError
-from app.db.session import get_session
+from app.db.session import get_session, get_session_factory
 from app.services import auth, quotas
 from app.services.auth import Principal
 from app.services.llm import LLMProvider, build_llm_client, get_llm_client
 from app.services.news import NewsProvider, build_news_provider
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
+SessionFactoryDep = Annotated[async_sessionmaker[AsyncSession], Depends(get_session_factory)]
 
 # auto_error=False: a missing header is decided below (anonymous or 401),
 # not by FastAPI's own 403. Also what puts the key field in /docs.

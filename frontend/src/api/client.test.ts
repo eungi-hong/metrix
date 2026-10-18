@@ -33,3 +33,36 @@ describe("MetrixApiClient", () => {
     await expect(new MetrixApiClient("http://localhost:8000", { exaApiKey: "exa_test", openaiApiKey: "sk-test" }).sendChat({ ticker: "NVDA", question: "Why?" })).rejects.toMatchObject({ kind: "quota", retryAfter: 45, status: 429 });
   });
 });
+
+describe("event stream", () => {
+  it("parses complete events, drops heartbeats and keeps the unfinished tail", async () => {
+    const { parseEventStream } = await import("./client");
+    const parsed = parseEventStream('retry: 3000\n\nevent: job\ndata: {"id":7,"status":"running"}\n\n: ping\n\nevent: ticker_updated\ndata: {"symbol":"NVDA","data_version":3}\n\nevent: job\ndata: {"id":');
+    expect(parsed.events).toEqual([
+      { type: "job", data: { id: 7, status: "running" } },
+      { type: "ticker_updated", data: { symbol: "NVDA", data_version: 3 } },
+    ]);
+    expect(parsed.rest).toBe('event: job\ndata: {"id":');
+  });
+
+  it("delivers events across chunk boundaries", async () => {
+    const chunks = ['event: job\ndata: {"id":1,', '"status":"succeeded"}\n\n'];
+    const body = new ReadableStream({ start(controller) { chunks.forEach((c) => controller.enqueue(new TextEncoder().encode(c))); controller.close(); } });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } })));
+    const seen: unknown[] = [];
+    await new MetrixApiClient("http://localhost:8000").streamEvents("NVDA", (event) => seen.push(event));
+    expect(seen).toEqual([{ type: "job", data: { id: 1, status: "succeeded" } }]);
+  });
+
+  it("rejects when the stream cannot be opened, so the caller can poll instead", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ detail: "busy" }), { status: 503, headers: { "Retry-After": "5" } })));
+    await expect(new MetrixApiClient("http://localhost:8000").streamEvents("NVDA", () => undefined)).rejects.toMatchObject({ status: 503 });
+  });
+
+  it("revalidates ticker data instead of trusting the browser's fresh copy", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(readyDemo), { status: 200, headers: { "Content-Type": "application/json" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    await new MetrixApiClient("http://localhost:8000").getTicker("NVDA");
+    expect(fetchMock.mock.calls[0][1].cache).toBe("no-cache");
+  });
+});

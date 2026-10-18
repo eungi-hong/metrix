@@ -27,7 +27,7 @@ from sqlalchemy.pool import NullPool, StaticPool
 
 from app.core.config import settings
 from app.db.base import Base
-from app.db.session import get_session
+from app.db.session import get_session, get_session_factory
 from app.main import create_app
 from app.models.identity import Plan, User
 from app.models.jobs import Job
@@ -377,6 +377,7 @@ def api_app(session_factory: async_sessionmaker[AsyncSession], llm: LLMProvider)
             yield session
 
     app.dependency_overrides[get_session] = override_session
+    app.dependency_overrides[get_session_factory] = lambda: session_factory
     app.dependency_overrides[get_llm_client] = lambda: llm
     return app
 

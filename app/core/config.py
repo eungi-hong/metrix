@@ -444,6 +444,18 @@ class Settings(BaseSettings):
     http_cache_stale_seconds: int = Field(
         default=300, ge=0, description="Cache-Control stale-while-revalidate on settled ticker responses."
     )
+    sse_heartbeat_seconds: float = Field(default=15.0, gt=0, description="Comment line this often on /events.")
+    sse_max_seconds: float = Field(
+        default=300.0, gt=0, description="An /events stream ends after this long; the client reconnects."
+    )
+    sse_poll_seconds: float = Field(
+        default=2.0, gt=0, description="/events polling interval when Postgres LISTEN is unavailable."
+    )
+    sse_retry_ms: int = Field(default=3000, ge=0, description="The reconnect delay /events suggests.")
+    sse_queue_size: int = Field(default=100, ge=1, description="Events buffered per stream; the oldest drop.")
+    sse_max_connections: int = Field(
+        default=500, ge=1, description="Open /events streams per process; more get 503."
+    )
     metrics_token: str | None = Field(
         default=None,
         description="Bearer token (or X-Metrics-Token) for GET /metrics, which is "

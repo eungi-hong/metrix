@@ -103,26 +103,58 @@ export default function App() {
     if (!jobId || mode !== "api" || connection !== "demo") return;
     let cancelled = false;
     const client = new MetrixApiClient(API_BASE_URL);
+    const abort = new AbortController();
+    let pollTimer: number | undefined;
+
+    const settle = (latest: Pick<Job, "status" | "last_error">) => {
+      if (latest.status === "succeeded") {
+        setJob(null);
+        void fetchApiTicker(symbol);
+        return true;
+      }
+      if (latest.status === "dead") {
+        setJob(null);
+        setError(new ApiError(latest.last_error ?? "The queued analysis did not complete.", "upstream", 502));
+        return true;
+      }
+      return false;
+    };
+
+    // Fallback: the job endpoint every 3.5 s, if the event stream is unavailable.
     const poll = async () => {
       try {
         const latest = await client.getJob(jobId);
         if (cancelled) return;
         setJob(latest);
-        if (latest.status === "succeeded") {
-          setJob(null);
-          void fetchApiTicker(symbol);
-        }
-        if (latest.status === "dead") {
-          setJob(null);
-          setError(new ApiError(latest.last_error ?? "The queued analysis did not complete.", "upstream", 502));
-        }
+        if (settle(latest)) window.clearInterval(pollTimer);
       } catch (reason) {
         if (!cancelled) setError(reason instanceof Error ? reason : new Error("Unable to check job progress."));
       }
     };
-    void poll();
-    const id = window.setInterval(() => void poll(), 3500);
-    return () => { cancelled = true; window.clearInterval(id); };
+    const startPolling = () => {
+      if (cancelled || pollTimer !== undefined) return;
+      void poll();
+      pollTimer = window.setInterval(() => void poll(), 3500);
+    };
+
+    // Live: job transitions as they happen. The server ends a stream after a
+    // few minutes; reconnect until the job settles.
+    const follow = async () => {
+      while (!cancelled) {
+        let settled = false;
+        await client.streamEvents(symbol, (event) => {
+          if (cancelled || event.type !== "job" || event.data.id !== jobId) return;
+          const update = event.data as Pick<Job, "status" | "progress" | "last_error">;
+          setJob((current) => current ? { ...current, status: update.status, progress: update.progress ?? current.progress } : current);
+          settled = settle(update);
+          if (settled) abort.abort();
+        }, abort.signal);
+        if (settled) return;
+      }
+    };
+    void poll().then(() => follow()).catch(() => { if (!cancelled) startPolling(); });
+
+    return () => { cancelled = true; abort.abort(); window.clearInterval(pollTimer); };
   }, [connection, fetchApiTicker, jobId, mode, symbol]);
 
   function useDemo() {
