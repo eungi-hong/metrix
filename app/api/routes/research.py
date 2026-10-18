@@ -15,7 +15,7 @@ endpoint that fetches.
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 
 import sqlalchemy as sa
 from fastapi import APIRouter, HTTPException, Query, Request, Response
@@ -49,12 +49,11 @@ from app.schemas.research import (
     TickerFilingsOut,
 )
 from app.services import evidence, response_cache, sessions, symbol_directory
+from app.services import returns as returns_service
 from app.services.edgar import EARNINGS_ITEM, ITEM_EVENTS
 
 router = APIRouter(tags=["research"])
 
-# Bars this many calendar days back are enough to find the previous session's close.
-PREVIOUS_BAR_LOOKBACK = timedelta(days=10)
 SHORT_CACHE = "private, max-age=60"
 
 
@@ -153,36 +152,6 @@ async def _stored_ticker(session: AsyncSession, symbol: str) -> Ticker:
     return ticker
 
 
-async def _session_returns(
-    session: AsyncSession, symbols: list[str], day: date, *, sessions_back: int = 1
-) -> dict[str, float | None]:
-    """Each symbol's compounded close-to-close return over the `sessions_back`
-    sessions ending on `day`, from stored bars; None where they are missing."""
-    if not symbols:
-        return {}
-    start = sessions.offset_session(day, -sessions_back) if sessions.is_session(day) else None
-    since = (start or day) - PREVIOUS_BAR_LOOKBACK
-    rows = (
-        await session.execute(
-            sa.select(Ticker.symbol, PriceBar.date, PriceBar.adj_close)
-            .join(PriceBar, PriceBar.ticker_id == Ticker.id)
-            .where(Ticker.symbol.in_(symbols), PriceBar.date >= since, PriceBar.date <= day)
-            .order_by(Ticker.symbol, PriceBar.date)
-        )
-    ).all()
-    bars: dict[str, list[tuple[date, float]]] = defaultdict(list)
-    for symbol, bar_date, close in rows:
-        bars[symbol].append((bar_date, float(close)))
-    out: dict[str, float | None] = {}
-    for symbol in symbols:
-        series = bars.get(symbol, [])
-        last = next((close for d, close in reversed(series) if d == day), None)
-        base_day = start if start is not None else None
-        base = next((close for d, close in reversed(series) if base_day is not None and d <= base_day), None)
-        out[symbol] = (last / base - 1.0) if last and base else None
-    return out
-
-
 async def _versions(session: AsyncSession, symbols: list[str]) -> list[int]:
     rows = dict(
         (await session.execute(sa.select(Ticker.symbol, Ticker.data_version).where(Ticker.symbol.in_(symbols)))).all()
@@ -228,7 +197,7 @@ async def movement_case(symbol: str, day: date, request: Request, session: Sessi
     if response_cache.matches(request.headers.get("if-none-match"), etag):
         return Response(status_code=304, headers=headers)
 
-    returns = await _session_returns(session, bench_symbols + peer_symbols, day)
+    returns = await returns_service.session_returns(session, bench_symbols + peer_symbols, day)
     neighbours = (
         await session.execute(
             sa.select(
@@ -473,7 +442,7 @@ async def market_pulse(
 
     sector_map = settings.benchmark_sector_map_json
     labels = [("Market", market)] + sorted((name, symbol) for name, symbol in sector_map.items())
-    returns = await _session_returns(session, [symbol for _, symbol in labels], latest, sessions_back=sessions_back)
+    returns = await returns_service.session_returns(session, [symbol for _, symbol in labels], latest, sessions_back=sessions_back)
     response.headers["Cache-Control"] = SHORT_CACHE
     return MarketPulseOut(
         sessions=covered,

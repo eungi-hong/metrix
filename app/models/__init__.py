@@ -27,6 +27,7 @@ from app.models.news import (
 )
 from app.models.symbols import ListedSymbol
 from app.models.usage import SpendDaily, UsageEvent
+from app.models.watchlists import Watchlist, WatchlistHolding
 
 __all__ = [
     "ApiKey",
@@ -58,6 +59,8 @@ __all__ = [
     "TickerDemand",
     "UsageEvent",
     "User",
+    "Watchlist",
+    "WatchlistHolding",
     "normalize_url",
     "url_fingerprint",
 ]
