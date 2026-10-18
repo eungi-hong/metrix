@@ -17,6 +17,11 @@ class PrewarmTriggered(BaseModel):
     trading_date: date
 
 
+class BackfillQueued(BaseModel):
+    queued: int = Field(description="Tickers with an analytics backfill job now active.")
+    symbols: list[str]
+
+
 class JobCount(BaseModel):
     kind: JobKind
     status: JobStatus

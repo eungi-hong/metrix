@@ -16,6 +16,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.models.enums import Direction, IngestStatus, NewsStatus, RelevanceTier
 
 IngestState = Literal["ready", "ingesting", "refreshing", "failed"]
+TimingOut = Literal["before_prior_close", "overnight", "intraday", "after_close", "later"]
+TriggerOut = Literal["raw", "abnormal", "both"]
+ComponentOut = Literal["market", "sector", "company"]
+DriftLabelOut = Literal["continued", "held", "reversed"]
+MovementSort = Literal["date", "abs_return", "abs_sar", "rvol"]
 
 
 class PriceBarOut(BaseModel):
@@ -65,6 +70,88 @@ class LinkedArticleOut(BaseModel):
     search_tier: str | None = Field(
         default=None, description="Which tier's search surfaced the article."
     )
+    timing: TimingOut | None = Field(
+        default=None,
+        description="When it was published relative to the move's XNYS sessions "
+        "(previous session P, the move's session T, the next session N): "
+        "before_prior_close (at or before close(P)), overnight (close(P) to "
+        "open(T)), intraday (open(T) to close(T)), after_close (close(T) to "
+        "open(N)) or later. Only the first three can have caused T's "
+        "close-to-close move. Null when unknown.",
+    )
+    timing_precision: Literal["time", "day"] | None = Field(
+        default=None,
+        description="'time' when the publication time is known; 'day' when only "
+        "the date is, in which case `timing` is set only if the whole day falls "
+        "in one bucket.",
+    )
+
+
+class DecompositionOut(BaseModel):
+    """The day's return in parts: alpha + market + sector + abnormal = daily_return.
+
+    From a market model with an orthogonalised sector factor, estimated on
+    the sessions before the move. See README, "How a movement is defined".
+    """
+
+    model: Literal["market_sector", "market_only"]
+    market_benchmark: str
+    sector_benchmark: str | None = Field(
+        default=None, description="Null for a market-only model (no mapped sector)."
+    )
+    estimation_sessions: int
+    alpha: float = Field(description="Daily intercept over the estimation window.")
+    beta_market: float
+    beta_sector: float | None = Field(
+        default=None, description="Loading on the sector's market-neutral return."
+    )
+    r_squared: float
+    sigma_e: float = Field(description="Residual standard deviation, as a daily return.")
+    market: float = Field(description="beta_market * the market's return that day.")
+    sector: float = Field(description="beta_sector * the sector's market-neutral return that day.")
+    expected: float = Field(description="alpha + market + sector.")
+    abnormal: float = Field(description="daily_return - expected: the company-specific part.")
+    sar: float | None = Field(
+        default=None,
+        description="Standardised abnormal return (forecast-error adjusted). A "
+        "heuristic size in residual standard deviations, not a probability.",
+    )
+    dominant: ComponentOut = Field(description="The largest of market, sector, company by size.")
+    note: str | None = Field(default=None, description="A caveat, e.g. why the model is market only.")
+
+
+class LegsOut(BaseModel):
+    """Where in the session the move happened. (1 + gap) * (1 + intraday) = 1 + daily_return."""
+
+    gap: float = Field(description="Prior adjusted close to the (adjusted) open.")
+    intraday: float = Field(description="Open to close.")
+
+
+class VolumeAnalysisOut(BaseModel):
+    relative_volume: float = Field(
+        description="The day's volume over the median of the sessions before it."
+    )
+    lookback_sessions: int
+
+
+class DriftOut(BaseModel):
+    """What happened next: cumulative abnormal return after the move, with the
+    model fixed at the move. Null until those sessions exist."""
+
+    car_5: float | None = None
+    car_20: float | None = None
+    label_5: DriftLabelOut | None = None
+    label_20: DriftLabelOut | None = None
+
+
+class RegimeOut(BaseModel):
+    """Volatility going into the move (the sessions before it, not including it)."""
+
+    realized_vol: float | None = Field(default=None, description="Annualised.")
+    percentile: float | None = Field(
+        default=None, description="0 to 100, against the same measure over the past year."
+    )
+    window_sessions: int
 
 
 class MovementOut(BaseModel):
@@ -96,6 +183,30 @@ class MovementOut(BaseModel):
 
     news_status: NewsStatus
     news: list[LinkedArticleOut] = Field(default_factory=list)
+
+    trigger: TriggerOut = Field(
+        default="raw",
+        description="Which detection test the day passed: raw (|r| >= max(floor, "
+        "k * sigma)), abnormal (|SAR| >= MOVEMENT_ABNORMAL_K), or both.",
+    )
+    qualifies: bool = Field(
+        default=True,
+        description="False only with include_unqualified=true: a movement that no "
+        "longer clears the threshold, kept because it was already researched.",
+    )
+    decomposition: DecompositionOut | None = Field(
+        default=None, description="Null when the day could not be decomposed."
+    )
+    decomposition_warning: str | None = Field(
+        default=None, description="Why there is no decomposition, when there is none."
+    )
+    legs: LegsOut | None = None
+    volume_analysis: VolumeAnalysisOut | None = Field(
+        default=None,
+        description="Relative volume. (`volume` above is the day's share volume.)",
+    )
+    drift: DriftOut | None = None
+    regime: RegimeOut | None = None
 
 
 class TickerOut(BaseModel):
@@ -130,6 +241,25 @@ class AppliedFiltersOut(BaseModel):
     min_magnitude: float | None = None
     direction: Direction | None = None
     tiers: list[RelevanceTier] | None = None
+    triggers: list[TriggerOut] | None = None
+    dominant: list[ComponentOut] | None = None
+    min_sar: float | None = None
+    sort: MovementSort = "date"
+    include_unqualified: bool = False
+
+
+class BenchmarkPointOut(BaseModel):
+    date: date
+    value: float = Field(description="Adjusted close rebased to 100 on `base_date`.")
+
+
+class BenchmarkSeriesOut(BaseModel):
+    """A benchmark's adjusted close, rebased for a chart overlay."""
+
+    symbol: str
+    role: Literal["market", "sector"]
+    base_date: date | None
+    points: list[BenchmarkPointOut]
 
 
 class TickerDetailOut(BaseModel):
@@ -159,3 +289,9 @@ class TickerDetailOut(BaseModel):
     pagination: PaginationOut
     movements: list[MovementOut]
     warnings: list[str] = Field(default_factory=list)
+    benchmarks: list[BenchmarkSeriesOut] | None = Field(
+        default=None,
+        description="With include_benchmarks=true: the market and sector "
+        "benchmarks over the same dates as the ticker's bars, rebased to 100 on "
+        "its first bar in range.",
+    )

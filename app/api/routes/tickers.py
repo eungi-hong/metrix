@@ -45,16 +45,26 @@ from app.models.news import MovementNewsLink
 from app.schemas.market import (
     AppliedFiltersOut,
     ArticleOut,
+    BenchmarkPointOut,
+    BenchmarkSeriesOut,
+    ComponentOut,
+    DecompositionOut,
+    DriftOut,
     IngestState,
+    LegsOut,
     LinkedArticleOut,
     MovementOut,
+    MovementSort,
     PaginationOut,
     PriceBarOut,
     PriceRangeOut,
+    RegimeOut,
     TickerDetailOut,
     TickerOut,
+    TriggerOut,
+    VolumeAnalysisOut,
 )
-from app.services import demand, ingestion, queue, quotas, spend, symbol_directory
+from app.services import benchmarks, demand, ingestion, queue, quotas, spend, symbol_directory
 from app.services.auth import Principal
 from app.services.limits import LimitResult
 from app.services.llm import LLMProvider
@@ -91,6 +101,37 @@ async def get_ticker_detail(
         None,
         description="Relevance tier(s) to include. Repeat the parameter for several. "
         "Movements with no news in these tiers are excluded.",
+    ),
+    trigger: list[TriggerOut] | None = Query(
+        None,
+        description="Which detection test flagged the movement: raw, abnormal, both. "
+        "Repeat for several.",
+    ),
+    dominant: list[ComponentOut] | None = Query(
+        None,
+        description="Movements whose largest component was market, sector or company. "
+        "Excludes movements that could not be decomposed.",
+    ),
+    min_sar: float | None = Query(
+        None,
+        ge=0,
+        description="Only movements whose standardised abnormal return is at least "
+        "this large in either direction. Excludes movements without one.",
+    ),
+    sort: MovementSort = Query(
+        "date",
+        description="Largest first: date (newest), abs_return, abs_sar, or rvol "
+        "(relative volume). Movements without the value sort last.",
+    ),
+    include_unqualified: bool = Query(
+        False,
+        description="Also return stored movements that no longer clear the "
+        "threshold but were kept because they had been researched (qualifies=false).",
+    ),
+    include_benchmarks: bool = Query(
+        False,
+        description="Also return the market and sector benchmarks, rebased to 100, "
+        "for a chart overlay. Honours `start`/`end`.",
     ),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -169,6 +210,8 @@ async def get_ticker_detail(
         return _empty_response(symbol, state, ensured.message, ensured.job_id)
 
     conditions: list[sa.ColumnElement[bool]] = [Movement.ticker_id == ticker.id]
+    if not include_unqualified:
+        conditions.append(Movement.qualifies.is_(True))
     if start:
         conditions.append(Movement.date >= start)
     if end:
@@ -181,10 +224,18 @@ async def get_ticker_detail(
         conditions.append(
             Movement.id.in_(
                 sa.select(MovementNewsLink.movement_id).where(
-                    MovementNewsLink.relevance_tier.in_(tier)
+                    MovementNewsLink.relevance_tier.in_(tier),
+                    MovementNewsLink.superseded_at.is_(None),
                 )
             )
         )
+    if trigger:
+        # A movement stored before triggers existed was flagged by the raw test.
+        conditions.append(sa.func.coalesce(Movement.trigger, "raw").in_(trigger))
+    if dominant:
+        conditions.append(Movement.dominant_component.in_(dominant))
+    if min_sar is not None:
+        conditions.append(sa.func.abs(Movement.sar) >= min_sar)
 
     total = await session.scalar(
         sa.select(sa.func.count()).select_from(Movement).where(*conditions)
@@ -193,7 +244,7 @@ async def get_ticker_detail(
         await session.scalars(
             sa.select(Movement)
             .where(*conditions)
-            .order_by(Movement.date.desc())
+            .order_by(*_ORDER[sort], Movement.date.desc())
             .limit(limit)
             .offset(offset)
             .options(
@@ -226,12 +277,20 @@ async def get_ticker_detail(
             min_magnitude=min_magnitude_pct,
             direction=direction,
             tiers=list(tier) if tier else None,
+            triggers=list(trigger) if trigger else None,
+            dominant=list(dominant) if dominant else None,
+            min_sar=min_sar,
+            sort=sort,
+            include_unqualified=include_unqualified,
         ),
         pagination=PaginationOut(
             limit=limit, offset=offset, total=total or 0, returned=len(movements)
         ),
         movements=[_movement_out(m, tier) for m in movements],
         warnings=ensured.warnings,
+        benchmarks=(
+            await _benchmark_series(session, ticker, start, end) if include_benchmarks else None
+        ),
     )
 
 
@@ -557,10 +616,23 @@ async def _enrich_what_is_owed(
     )
 
 
+# Sort orders, largest first; NULLs last so undecomposed movements trail.
+_ORDER: dict[str, tuple[sa.ColumnElement, ...]] = {
+    "date": (),
+    "abs_return": (Movement.abs_return.desc(),),
+    "abs_sar": (sa.func.abs(Movement.sar).desc().nulls_last(),),
+    "rvol": (Movement.relative_volume.desc().nulls_last(),),
+}
+
+
 def _movement_out(
     movement: Movement, tiers: list[RelevanceTier] | None
 ) -> MovementOut:
-    links = sorted(movement.news_links, key=lambda l: l.relevance_score, reverse=True)
+    links = sorted(
+        (link for link in movement.news_links if link.superseded_at is None),
+        key=lambda l: l.relevance_score,
+        reverse=True,
+    )
     if tiers:
         links = [link for link in links if link.relevance_tier in tiers]
 
@@ -596,10 +668,114 @@ def _movement_out(
                 relevance_score=link.relevance_score,
                 rationale=link.rationale,
                 search_tier=link.search_tier,
+                timing=link.timing,
+                timing_precision=link.timing_precision,
             )
             for link in links
         ],
+        trigger=movement.trigger or "raw",
+        qualifies=movement.qualifies,
+        decomposition=_decomposition_out(movement),
+        decomposition_warning=movement.decomposition_warning
+        if movement.decomposition_model is None
+        else None,
+        legs=LegsOut(gap=movement.gap_return, intraday=movement.intraday_return)
+        if movement.gap_return is not None and movement.intraday_return is not None
+        else None,
+        volume_analysis=VolumeAnalysisOut(
+            relative_volume=movement.relative_volume,
+            lookback_sessions=settings.rvol_lookback_sessions,
+        )
+        if movement.relative_volume is not None
+        else None,
+        drift=DriftOut(
+            car_5=movement.car_5,
+            car_20=movement.car_20,
+            label_5=movement.drift_5_label,
+            label_20=movement.drift_20_label,
+        )
+        if movement.decomposition_model is not None
+        else None,
+        regime=RegimeOut(
+            realized_vol=movement.realized_vol,
+            percentile=movement.realized_vol_percentile,
+            window_sessions=settings.regime_window_sessions,
+        )
+        if movement.realized_vol is not None
+        else None,
     )
+
+
+def _decomposition_out(movement: Movement) -> DecompositionOut | None:
+    if movement.decomposition_model is None or movement.market_benchmark is None:
+        return None
+    return DecompositionOut(
+        model=movement.decomposition_model,
+        market_benchmark=movement.market_benchmark,
+        sector_benchmark=movement.sector_benchmark,
+        estimation_sessions=movement.estimation_sessions or 0,
+        alpha=movement.alpha or 0.0,
+        beta_market=movement.beta_market or 0.0,
+        beta_sector=movement.beta_sector,
+        r_squared=movement.r_squared or 0.0,
+        sigma_e=movement.sigma_e or 0.0,
+        market=movement.market_component or 0.0,
+        sector=movement.sector_component or 0.0,
+        expected=movement.expected_return or 0.0,
+        abnormal=movement.abnormal_return or 0.0,
+        sar=movement.sar,
+        dominant=movement.dominant_component or "company",
+        note=movement.decomposition_warning,
+    )
+
+
+async def _benchmark_series(
+    session: AsyncSession, ticker: Ticker, start: date | None, end: date | None
+) -> list[BenchmarkSeriesOut]:
+    """The ticker's benchmarks over its own bars' dates, rebased to 100 on the
+    first of them. A benchmark with no stored bars there is left out."""
+    ticker_dates = (
+        await session.scalars(
+            sa.select(PriceBar.date)
+            .where(
+                PriceBar.ticker_id == ticker.id,
+                *([PriceBar.date >= start] if start else []),
+                *([PriceBar.date <= end] if end else []),
+            )
+            .order_by(PriceBar.date)
+        )
+    ).all()
+    if not ticker_dates:
+        return []
+    first, last = ticker_dates[0], ticker_dates[-1]
+    choice = benchmarks.choose(ticker.sector, ticker.industry)
+    series = []
+    for role, symbol in (("market", choice.market), ("sector", choice.sector)):
+        if symbol is None:
+            continue
+        rows = (
+            await session.execute(
+                sa.select(PriceBar.date, PriceBar.adj_close)
+                .join(Ticker, Ticker.id == PriceBar.ticker_id)
+                .where(Ticker.symbol == symbol, PriceBar.date >= first, PriceBar.date <= last)
+                .order_by(PriceBar.date)
+            )
+        ).all()
+        if not rows:
+            continue
+        base = float(rows[0].adj_close)
+        series.append(
+            BenchmarkSeriesOut(
+                symbol=symbol,
+                role=role,
+                base_date=rows[0].date,
+                points=[
+                    BenchmarkPointOut(date=row.date, value=round(100 * float(row.adj_close) / base, 4))
+                    for row in rows
+                ],
+            )
+        )
+    return series
 
 
 async def _price_range(session: AsyncSession, ticker: Ticker) -> PriceRangeOut:

@@ -18,8 +18,10 @@ from app.core.config import settings
 from app.core.context import CallClass
 from app.models.identity import ApiKey, Plan, User
 from app.models.jobs import Job, JobKind, JobSource, JobStatus, PrewarmRun
+from app.models.market import PriceBar, Ticker
 from app.models.usage import UsageEvent
 from app.schemas.admin import (
+    BackfillQueued,
     DeadJob,
     JobCount,
     KeyCreate,
@@ -78,6 +80,40 @@ async def trigger_prewarm(
     )
     await session.commit()
     return PrewarmTriggered(job_id=job.id, trading_date=trading_date)
+
+
+@router.post(
+    "/backfill-analytics",
+    response_model=BackfillQueued,
+    status_code=202,
+    summary="Queue the decomposition and analytics backfill for every stored ticker",
+)
+async def trigger_backfill_analytics(session: SessionDep) -> BackfillQueued:
+    """One `backfill_analytics` job per ticker with stored prices, benchmarks
+    excepted. Free: no news, no LLM; it fetches deeper price history from
+    yfinance only where a ticker's stored bars are too short. Safe to repeat:
+    a ticker's job is deduplicated while active."""
+    symbols = list(
+        (
+            await session.scalars(
+                sa.select(Ticker.symbol)
+                .where(Ticker.is_benchmark.is_(False))
+                .where(sa.exists().where(PriceBar.ticker_id == Ticker.id))
+                .order_by(Ticker.symbol)
+            )
+        ).all()
+    )
+    for symbol in symbols:
+        await queue.enqueue(
+            session,
+            JobKind.BACKFILL_ANALYTICS,
+            {"symbol": symbol},
+            priority=queue.PRIORITY_BACKFILL,
+            dedupe_key=queue.analytics_key(symbol),
+            source=JobSource.SCHEDULED,
+        )
+    await session.commit()
+    return BackfillQueued(queued=len(symbols), symbols=symbols)
 
 
 @router.get("/queue", response_model=QueueSummary, summary="Queue health and the last run")

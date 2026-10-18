@@ -207,7 +207,9 @@ async def _retrieve(
     if ticker is None:
         return RetrievedContext()
 
-    conditions = [Movement.ticker_id == ticker.id]
+    # Movements kept only because they were paid for no longer qualify, and
+    # are not shown anywhere, chat included.
+    conditions = [Movement.ticker_id == ticker.id, Movement.qualifies.is_(True)]
     if start:
         conditions.append(Movement.date >= start)
     if end:
@@ -251,8 +253,13 @@ async def _retrieve(
     return context
 
 
+def _current_links(movement: Movement) -> list[MovementNewsLink]:
+    """The links a later scoring pass has not superseded."""
+    return [link for link in movement.news_links if link.superseded_at is None]
+
+
 def _top_links(movement: Movement) -> list[MovementNewsLink]:
-    return sorted(movement.news_links, key=lambda l: l.relevance_score, reverse=True)[
+    return sorted(_current_links(movement), key=lambda l: l.relevance_score, reverse=True)[
         : settings.chat_max_articles_per_movement
     ]
 
@@ -287,7 +294,7 @@ def _render_prompt(question: str, context: RetrievedContext) -> str:
         lines.append(
             f"  [{ref}] {movement.date.isoformat()}  {movement.daily_return:+.2%}  "
             f"({movement.direction.value}, threshold {movement.threshold:.2%} via "
-            f"{movement.threshold_source}, {len(movement.news_links)} linked article(s))"
+            f"{movement.threshold_source}, {len(_current_links(movement))} linked article(s))"
         )
 
     lines += ["", "NEWS LINKED TO THE MOST SIGNIFICANT MOVEMENTS:"]
