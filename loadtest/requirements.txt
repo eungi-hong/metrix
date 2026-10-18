@@ -1,0 +1,2 @@
+# The load test only; never installed in the app image. MIT.
+locust==2.37.10
