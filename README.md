@@ -380,6 +380,44 @@ The answer cites `[M3]`/`[A2]` labels that map to the `sources` block, so every 
 traces back to a row in the database. If nothing relevant is stored, `grounded` is
 `false` and the model is instructed to say so rather than speculate.
 
+### Research endpoints (read-only)
+
+These read what is stored and never fetch, search, call a model or queue work; a
+ticker Metrix has not ingested is a 404 that points at `GET /tickers/{symbol}`.
+
+| Endpoint | What it returns |
+|---|---|
+| `GET /symbols/search?q=` | Symbols and companies: exact symbol, then prefix, then name matches |
+| `GET /tickers/{symbol}/movements/{date}` | One movement's case file: decomposition, legs, volume, drift, filings, evidence with timing and role, the benchmarks' and peers' returns that session, and the detection audit |
+| `GET /tickers/{symbol}/filings` | Stored SEC filings (filter by `form`, `item`, dates), with the movements each sits next to |
+| `GET /tickers/{symbol}/earnings` | Earnings releases (8-K Item 2.02) placed on the first session they could move, with that session's movement |
+| `GET /market/pulse?sessions=` | The latest sessions' largest abnormal moves, each with its evidence in a line, and sector returns |
+| `/watchlists`, `GET /watchlists/{id}/digest?sessions=` | Your lists (optionally weighted), and each holding's moves and contribution |
+
+Every movement also carries `evidence`: whether it is explained, still being
+researched, waiting for its news window to close, deferred by the spend cap, and
+when research is expected.
+
+### Live updates, caching and operations
+
+- `GET /events?symbol=` streams server-sent events: `job` (an ingestion or
+  enrichment changed state) and `ticker_updated` (its data changed; refetch). On
+  Postgres they come from `LISTEN`, otherwise from polling. The web app uses it
+  instead of polling the job.
+- `GET /tickers/{symbol}` returns an `ETag` and answers `If-None-Match` with `304`;
+  built responses are cached in Redis under the same tag. Both are keyed by the
+  ticker's data version, which every committed write bumps. Results:
+  [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+- Every response carries `X-Request-ID` (yours, if you send a plain one), and every
+  log line the request writes includes it.
+- `/health/live` and `/health/ready` (503 without the database) for orchestration;
+  `GET /metrics` in Prometheus format once `METRICS_TOKEN` is set (send it as a
+  bearer token): request latency by route, queue depth and lag by priority, dead
+  jobs, today's LLM tokens and dollars by operation, cache outcomes, open streams.
+- The web app's API types (`frontend/src/api/schema.d.ts`) are generated from the
+  OpenAPI document (`python scripts/export_openapi.py`, then `npm run gen:api`);
+  CI fails if either is stale.
+
 ---
 
 ## Reading it in a terminal

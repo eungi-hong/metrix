@@ -3,6 +3,28 @@
 One entry per phase, newest first. Each phase ships on its own branch
 (`v2/<phase>-<slug>`) and pull request.
 
+## Phase 4: research API, read path, live updates (`v2/4-research-api`)
+
+- Read path: `tickers.data_version`, bumped at commit by a session hook for every
+  write that changes `GET /tickers/{symbol}`; strong ETag and `304`; a Redis
+  response cache keyed by the tag; `Cache-Control` for settled data. Load test in
+  `loadtest/` and [docs/PERFORMANCE.md](../PERFORMANCE.md): warm reads 490 to 16 ms
+  median at 50 users, and no collapse at 150 (synthetic-local).
+- `GET /events` (server-sent events from Postgres `LISTEN` on `job_events` and the
+  new `ticker_events`, with a polling fallback); the web app drops its 3.5 s poll.
+- Research endpoints: symbol search (pattern and trigram indexes on Postgres), the
+  movement case file (peers' and benchmarks' same-session returns, detection
+  audit), filings, earnings from 8-K Item 2.02, market pulse, watchlists with a
+  digest.
+- `evidence` status on every movement (why there is none yet, and when).
+- Nightly: seed tickers' moves on the run's own session are enriched first; the
+  universe's peers' prices ride in the first chunk.
+- Operations: `X-Request-ID`, `/health/live`, `/health/ready`, `/metrics`
+  (Prometheus, behind `METRICS_TOKEN`).
+- Typed contract: `frontend/openapi.json` and generated `schema.d.ts`, checked in CI.
+- Migrations `e8b4c1d6f2a7`, `f3c9a7d1e5b2` (Postgres-only, optional indexes),
+  `a6d2e9c4b8f1`.
+
 ## Phase 3: primary sources and scorer v2 (`v2/3-primary-sources`)
 
 Additive and opt-in: no default changes what is stored or spent.
