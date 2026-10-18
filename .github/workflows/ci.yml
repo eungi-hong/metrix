@@ -119,6 +119,16 @@ jobs:
         env:
           # Any value: the build refuses to run without one (vite.config.ts).
           VITE_METRIX_API_BASE_URL: https://api.example.invalid
+      # End-to-end flows, phone overflow and axe, against the production
+      # bundle with the mocked API (playwright.config.ts builds it).
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: frontend/playwright-report
+          retention-days: 7
 
   contract:
     name: contract
