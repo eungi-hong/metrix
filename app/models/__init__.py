@@ -7,6 +7,7 @@ configures relationships, and so Alembic autogenerate sees the full metadata.
 from app.db.base import Base
 from app.models.chat import ChatMessage, Conversation
 from app.models.demand import TickerDemand
+from app.models.filings import Filing, MovementFiling
 from app.models.enums import (
     Direction,
     IngestStatus,
@@ -31,6 +32,8 @@ __all__ = [
     "ApiKey",
     "Base",
     "ChatMessage",
+    "Filing",
+    "MovementFiling",
     "Conversation",
     "Direction",
     "IngestStatus",

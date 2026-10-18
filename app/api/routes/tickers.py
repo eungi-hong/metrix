@@ -41,7 +41,9 @@ from app.core.symbols import is_valid_symbol, normalize_symbol
 from app.models.enums import Direction, IngestStatus, RelevanceTier
 from app.models.jobs import JobKind, JobSource
 from app.models.market import Movement, PriceBar, Ticker
+from app.models.filings import MovementFiling
 from app.models.news import MovementNewsLink
+from app.services.edgar import ITEM_EVENTS
 from app.schemas.market import (
     AppliedFiltersOut,
     ArticleOut,
@@ -50,6 +52,7 @@ from app.schemas.market import (
     ComponentOut,
     DecompositionOut,
     DriftOut,
+    FilingOut,
     IngestState,
     LegsOut,
     LinkedArticleOut,
@@ -248,7 +251,8 @@ async def get_ticker_detail(
             .limit(limit)
             .offset(offset)
             .options(
-                selectinload(Movement.news_links).selectinload(MovementNewsLink.article)
+                selectinload(Movement.news_links).selectinload(MovementNewsLink.article),
+                selectinload(Movement.filings),
             )
         )
     ).all()
@@ -670,9 +674,14 @@ def _movement_out(
                 search_tier=link.search_tier,
                 timing=link.timing,
                 timing_precision=link.timing_precision,
+                role=link.role,
+                scorer_version=link.scorer_version,
             )
             for link in links
         ],
+        filings=[_filing_out(mf) for mf in sorted(movement.filings, key=lambda mf: mf.filing.accepted_at or datetime.min.replace(tzinfo=timezone.utc))],
+        evidence_abstained=movement.evidence_abstained,
+        abstain_reason=movement.abstain_reason,
         trigger=movement.trigger or "raw",
         qualifies=movement.qualifies,
         decomposition=_decomposition_out(movement),
@@ -703,6 +712,25 @@ def _movement_out(
         )
         if movement.realized_vol is not None
         else None,
+    )
+
+
+def _filing_out(attachment: MovementFiling) -> FilingOut:
+    filing = attachment.filing
+    current = attachment.superseded_at is None
+    return FilingOut(
+        accession=filing.accession,
+        form=filing.form,
+        items=list(filing.items or []),
+        events=[ITEM_EVENTS[i] for i in (filing.items or []) if i in ITEM_EVENTS],
+        accepted_at=filing.accepted_at,
+        url=filing.url,
+        timing=attachment.timing,
+        timing_precision=attachment.timing_precision,
+        relevance_tier=attachment.relevance_tier if current else None,
+        relevance_score=attachment.relevance_score if current else None,
+        role=attachment.role if current else None,
+        rationale=attachment.rationale if current else None,
     )
 
 

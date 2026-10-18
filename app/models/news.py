@@ -111,6 +111,9 @@ class MovementNewsLink(Base, TimestampMixin):
     # paid for, so it is kept and hidden rather than deleted, and cleared if a
     # later pass supports it again.
     superseded_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # Scorer v2 only: primary, contributing or context.
+    role: Mapped[str | None] = mapped_column(sa.String(16))
+    scorer_version: Mapped[str | None] = mapped_column(sa.String(8))
 
     movement: Mapped["Movement"] = relationship(back_populates="news_links", lazy="noload")
     article: Mapped[NewsArticle] = relationship(back_populates="links", lazy="joined")

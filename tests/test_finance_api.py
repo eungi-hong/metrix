@@ -159,3 +159,30 @@ async def test_chat_leaves_out_retired_movements_and_superseded_links(client, re
     urls = {source["url"] for source in body["sources"]["articles"]}
     assert company_day.isoformat() in dates and retired_day.isoformat() not in dates
     assert urls == {"https://n.test/current"}
+
+
+async def test_a_movement_lists_its_filings_and_scorer_v2_verdicts(client, ready, session_factory):
+    from app.models.filings import Filing, MovementFiling
+
+    _, company_day, _ = ready
+    async with session_factory() as session:
+        company = await session.scalar(sa.select(Movement).where(Movement.date == company_day))
+        filing = Filing(ticker_id=company.ticker_id, cik=1, accession="0000000001-26-000001", form="8-K",
+                        filing_date=company_day, accepted_at=datetime(2026, 1, 1, 21, 5, tzinfo=timezone.utc),
+                        items=["2.02", "9.01"], url="https://www.sec.gov/Archives/edgar/data/1/x.htm")
+        session.add(filing)
+        await session.flush()
+        session.add(MovementFiling(movement_id=company.id, filing_id=filing.id, timing="overnight", timing_precision="time",
+                                   relevance_tier="easy", relevance_score=0.93, role="primary", rationale="Earnings."))
+        company.evidence_abstained = False
+        await session.commit()
+
+    body = (await client.get("/tickers/SYNTH")).json()
+    move = next(m for m in body["movements"] if m["date"] == company_day.isoformat())
+    (f,) = move["filings"]
+    assert (f["form"], f["events"], f["timing"], f["role"], f["relevance_score"]) == (
+        "8-K", ["results of operations (earnings)"], "overnight", "primary", 0.93
+    )
+    assert move["evidence_abstained"] is False and move["abstain_reason"] is None
+    others = [m for m in body["movements"] if m["date"] != company_day.isoformat()]
+    assert all(m["filings"] == [] and m["evidence_abstained"] is None for m in others)

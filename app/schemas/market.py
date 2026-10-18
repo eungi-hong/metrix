@@ -85,6 +85,28 @@ class LinkedArticleOut(BaseModel):
         "the date is, in which case `timing` is set only if the whole day falls "
         "in one bucket.",
     )
+    role: Literal["primary", "contributing", "context"] | None = Field(
+        default=None, description="Scorer v2 only: the cause, part of it, or background."
+    )
+    scorer_version: str | None = Field(default=None, description="v1 or v2; null before v2 existed.")
+
+
+class FilingOut(BaseModel):
+    """An SEC filing in the movement's window, with its session timing, and
+    scorer v2's verdict on it when it was judged."""
+
+    accession: str
+    form: str
+    items: list[str] = Field(default_factory=list)
+    events: list[str] = Field(default_factory=list)
+    accepted_at: datetime | None = None
+    url: str | None = None
+    timing: TimingOut | None = None
+    timing_precision: Literal["time", "day"] | None = None
+    relevance_tier: str | None = None
+    relevance_score: float | None = None
+    role: Literal["primary", "contributing", "context"] | None = None
+    rationale: str | None = None
 
 
 class DecompositionOut(BaseModel):
@@ -207,6 +229,13 @@ class MovementOut(BaseModel):
     )
     drift: DriftOut | None = None
     regime: RegimeOut | None = None
+    filings: list[FilingOut] = Field(
+        default_factory=list, description="SEC filings in the news window (when EDGAR is enabled)."
+    )
+    evidence_abstained: bool | None = Field(
+        default=None, description="Scorer v2: true when it judged that nothing explains the move."
+    )
+    abstain_reason: str | None = None
 
 
 class TickerOut(BaseModel):

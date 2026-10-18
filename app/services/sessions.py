@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 from functools import lru_cache
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 import exchange_calendars as xcals
 import pandas as pd
@@ -42,6 +43,7 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 EXCHANGE = "XNYS"
+NEW_YORK = ZoneInfo("America/New_York")
 # The calendar is built from this date to a year past today; older movements
 # fall back to calendar-day handling.
 CALENDAR_START = "2000-01-01"

@@ -86,9 +86,10 @@ from app.core.errors import (
 from app.core.logging import get_logger
 from app.models.enums import IngestStatus, NewsStatus
 from app.models.jobs import JobKind, JobSource
+from app.models.filings import MovementFiling
 from app.models.market import PRICE_DECIMALS, Movement, PriceBar, Ticker
 from app.models.news import MovementNewsLink, NewsArticle, url_fingerprint
-from app.services import analytics, benchmarks, detection, sessions
+from app.services import analytics, benchmarks, detection, filings, relevance_v2, sessions
 from app.services import prices as price_service
 from app.services import queue
 from app.services.llm import LLMProvider, get_llm_client
@@ -686,13 +687,23 @@ async def _enrich_movement(
         _record_failure(movement, result, exc, f"{movement.date}: news search: {exc}")
         return 0
 
+    # Filings in the window are attached whatever the scorer; under v2 they
+    # are also candidates. Best effort: EDGAR never fails an enrichment.
+    attachments = await filings.attach_filings(session, ticker, movement)
+    use_v2 = settings.relevance_scorer_version == relevance_v2.SCORER_VERSION
+    if use_v2:
+        candidates = candidates + [(FILING_TIER, _filing_candidate(a)) for a in attachments]
+
     if not candidates:
         # No evidence is not counter-evidence: keep any links an earlier pass made.
         await _mark_enriched(session, movement, allow_followup_jobs=allow_followup_jobs)
         return 0
 
     try:
-        scored = await score_candidates(context, candidates, peers, llm)
+        if use_v2:
+            scored = await _score_v2(context, candidates, peers, llm, movement)
+        else:
+            scored = await score_candidates(context, candidates, peers, llm)
     except MetrixError as exc:
         _record_failure(movement, result, exc, f"{movement.date}: scoring: {exc}")
         return 0
@@ -701,7 +712,15 @@ async def _enrich_movement(
     frame = sessions.frame_for(movement.date)
     linked = 0
     kept_articles: set[int] = set()
+    kept_filings: set[str] = set()
+    by_accession = {a.filing.accession: a for a in attachments}
     for item in scored:
+        if item.candidate.source_type == "filing":
+            attachment = by_accession.get(item.candidate.accession or "")
+            if attachment is not None:
+                _record_filing_verdict(attachment, item)
+                kept_filings.add(attachment.filing.accession)
+            continue
         article = await _upsert_article(session, item.candidate)
 
         # Re-check the window against the STORED article, which is the
@@ -725,9 +744,83 @@ async def _enrich_movement(
             linked += 1
 
     await _supersede_links(session, movement, kept_articles)
+    if use_v2:
+        now = _now()
+        for attachment in attachments:
+            if attachment.relevance_score is not None and attachment.filing.accession not in kept_filings:
+                attachment.superseded_at = attachment.superseded_at or now
     await _mark_enriched(session, movement, allow_followup_jobs=allow_followup_jobs)
     await session.flush()
     return linked
+
+
+# The search tier recorded for a filing put to scorer v2 as a candidate.
+FILING_TIER = "filing"
+
+
+def _filing_candidate(attachment: MovementFiling) -> NewsCandidate:
+    filing = attachment.filing
+    events = _filing_events(filing.items or [])
+    description = f"{filing.form}" + (f": {'; '.join(events)}" if events else "")
+    return NewsCandidate(
+        url=filing.url or f"https://www.sec.gov/Archives/edgar/data/{filing.cik}/{filing.accession.replace('-', '')}/",
+        title=f"SEC filing {description}",
+        published_at=filing.accepted_at,
+        summary=f"{description}. Accession {filing.accession}, filed {filing.filing_date.isoformat()}.",
+        source_domain="sec.gov",
+        provider="sec",
+        source_type="filing",
+        accession=filing.accession,
+    )
+
+
+def _filing_events(items: list[str]) -> list[str]:
+    from app.services.edgar import ITEM_EVENTS
+
+    return [f"Item {item} {ITEM_EVENTS[item]}" for item in items if item in ITEM_EVENTS]
+
+
+def _record_filing_verdict(attachment: MovementFiling, item: ScoredCandidate) -> None:
+    attachment.relevance_tier = item.tier.value
+    attachment.relevance_score = item.score
+    attachment.role = getattr(item, "role", None)
+    attachment.rationale = item.rationale
+    attachment.scored_by = item.scored_by
+    attachment.superseded_at = None
+
+
+def _movement_facts(movement: Movement) -> relevance_v2.MovementFacts:
+    return relevance_v2.MovementFacts(
+        market=movement.market_component,
+        sector=movement.sector_component,
+        company=movement.abnormal_return,
+        gap=movement.gap_return,
+        intraday=movement.intraday_return,
+    )
+
+
+async def _score_v2(
+    context: MovementContext,
+    candidates: list[tuple[str, NewsCandidate]],
+    peers: PeerSet,
+    llm: LLMProvider,
+    movement: Movement,
+) -> list[ScoredCandidate]:
+    """One v2 scoring call; records the movement-level abstain on the movement."""
+    request = relevance_v2.build_scoring_request_v2(context, candidates, peers, facts=_movement_facts(movement))
+    if request is None:
+        return []
+    report = await llm.parse_structured(
+        system=request.system,
+        user=request.user,
+        output_model=request.output_model,
+        operation="relevance",
+        max_tokens=request.max_tokens,
+    )
+    outcome = relevance_v2.apply_scoring_result_v2(request, report, scored_by=llm.model)
+    movement.evidence_abstained = outcome.abstained
+    movement.abstain_reason = outcome.abstain_reason
+    return list(outcome.scored)
 
 
 async def _mark_enriched(
@@ -874,6 +967,8 @@ async def _link(
         link.scored_by = item.scored_by
         link.timing = timing.timing
         link.timing_precision = timing.precision
+        link.role = getattr(item, "role", None)
+        link.scorer_version = _scorer_version(item)
         link.superseded_at = None  # supported again
         return False
 
@@ -888,10 +983,16 @@ async def _link(
             scored_by=item.scored_by,
             timing=timing.timing,
             timing_precision=timing.precision,
+            role=getattr(item, "role", None),
+            scorer_version=_scorer_version(item),
         )
     )
     await session.flush()
     return True
+
+
+def _scorer_version(item: ScoredCandidate) -> str:
+    return relevance_v2.SCORER_VERSION if isinstance(item, relevance_v2.ScoredCandidateV2) else "v1"
 
 
 # ------------------------------------------------- benchmarks and analytics

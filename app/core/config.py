@@ -700,6 +700,30 @@ class Settings(BaseSettings):
         description="Sessions after the move covered, through their after-hours.",
     )
 
+    # ------------------------------------------------------------- scorer v2
+    relevance_scorer_version: Literal["v1", "v2"] = Field(
+        default="v1",
+        description="v1: the original scorer. v2: adds the decomposition, session legs, "
+        "each candidate's timing bucket, filings as candidates, source quality, a role "
+        "per link and a movement-level abstain. v2 becomes the default only once "
+        "docs/EVALUATION.md shows it is better.",
+    )
+    relevance_snippet_chars: int = Field(
+        default=1200,
+        ge=200,
+        description="Characters of each candidate's summary or text shown to scorer v2 "
+        "(Exa already returns them; no extra call).",
+    )
+    source_primary_domains: str = Field(
+        default="sec.gov,businesswire.com,prnewswire.com,globenewswire.com,accesswire.com",
+        description="Comma-separated domains scorer v2 is told are primary sources "
+        "(filings and wire releases). Hosts starting 'ir.' or 'investor' count too.",
+    )
+    source_tier1_domains: str = Field(
+        default="reuters.com,bloomberg.com,wsj.com,ft.com,cnbc.com,apnews.com,nytimes.com,barrons.com,marketwatch.com",
+        description="Comma-separated domains scorer v2 is told are tier-1 newsrooms.",
+    )
+
     # ------------------------------------------------------------ SEC EDGAR
     sec_edgar_enabled: bool = Field(
         default=False,

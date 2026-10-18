@@ -58,6 +58,8 @@ class Ticker(Base, TimestampMixin):
     is_benchmark: Mapped[bool] = mapped_column(
         sa.Boolean, default=False, server_default=sa.false(), nullable=False
     )
+    # SEC Central Index Key, looked up once when EDGAR is enabled.
+    cik: Mapped[int | None] = mapped_column(sa.Integer)
 
     prices: Mapped[list["PriceBar"]] = relationship(
         back_populates="ticker", cascade="all, delete-orphan", lazy="noload"
@@ -199,10 +201,16 @@ class Movement(Base, TimestampMixin):
     realized_vol: Mapped[float | None] = mapped_column(sa.Float)
     realized_vol_percentile: Mapped[float | None] = mapped_column(sa.Float)
     analytics_computed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # Scorer v2 may say nothing explains the move; why, in a sentence.
+    evidence_abstained: Mapped[bool | None] = mapped_column(sa.Boolean)
+    abstain_reason: Mapped[str | None] = mapped_column(sa.Text)
 
     ticker: Mapped[Ticker] = relationship(back_populates="movements", lazy="noload")
     news_links: Mapped[list["MovementNewsLink"]] = relationship(
         back_populates="movement", cascade="all, delete-orphan", lazy="noload"
+    )
+    filings: Mapped[list["MovementFiling"]] = relationship(  # noqa: F821
+        cascade="all, delete-orphan", lazy="noload", viewonly=False
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid

@@ -56,6 +56,9 @@ class NewsCandidate:
     source_domain: str | None = None
     provider: str = "unknown"
     raw: dict[str, Any] = field(default_factory=dict)
+    # "news", or "filing" for an SEC filing put to scorer v2 as a candidate.
+    source_type: str = "news"
+    accession: str | None = None
 
     def snippet(self, limit: int = 1200) -> str:
         """The text handed to the relevance model. Summary first, then body."""
