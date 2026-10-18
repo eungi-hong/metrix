@@ -75,6 +75,7 @@ async def test_every_call_counts_and_the_limit_answers_429_with_headers(session_
     assert "requests_per_minute" in refused.json()["detail"]
     assert refused.headers["retry-after"] == "20"  # one more cell: 60 s / 3
     assert refused.headers["x-ratelimit-remaining"] == "0"
+    assert refused.headers["x-ratelimit-scope"] == "requests_per_minute"
     assert logged[-1] == ("quota_exceeded", logged[-1][1])
     assert logged[-1][1]["quota"] == "requests_per_minute"
 

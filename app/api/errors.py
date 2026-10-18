@@ -78,6 +78,8 @@ def register_exception_handlers(app: FastAPI) -> None:
     async def _rate_limited(request: Request, exc: RateLimited) -> JSONResponse:
         headers = exc.result.headers()
         headers["Retry-After"] = str(max(math.ceil(exc.result.retry_after), 1))
+        # Which limit, so a client can explain it in its own words.
+        headers["X-RateLimit-Scope"] = exc.quota
         return JSONResponse(
             status_code=429, content=_body("rate_limited", str(exc)), headers=headers
         )

@@ -76,7 +76,15 @@ def create_app() -> FastAPI:
                 "X-OpenAI-Api-Key",
                 "X-Request-ID",
             ],
-            expose_headers=["ETag", "X-Request-ID"],
+            expose_headers=[
+                "ETag",
+                "X-Request-ID",
+                "Retry-After",
+                "X-RateLimit-Limit",
+                "X-RateLimit-Remaining",
+                "X-RateLimit-Reset",
+                "X-RateLimit-Scope",
+            ],
             max_age=600,
         )
     app.add_middleware(InteractiveAttributionMiddleware)
