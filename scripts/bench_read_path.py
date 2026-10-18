@@ -578,6 +578,42 @@ def markdown_table(results: list[Summary]) -> str:
     return "\n".join([header, *rows])
 
 
+def _median_range(values: list[float]) -> str:
+    """`median (min to max)`, or the single value when there is only one."""
+    if len(values) == 1:
+        return f"{values[0]:g}"
+    return f"{statistics.median(values):g} ({min(values):g} to {max(values):g})"
+
+
+def runs_table(documents: list[dict[str, Any]]) -> str:
+    """Median and range of each series across repeated runs.
+
+    One run on a shared machine is one draw: back-to-back runs here differed
+    by up to about 1.5x. Quoting the median with its range keeps that visible.
+    """
+    series: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    for document in documents:
+        for result in document["results"]:
+            series.setdefault((result["shape"], result["concurrency"]), []).append(result)
+
+    header = (
+        "| Query | Concurrency | Runs | p50 ms | p95 ms | p99 ms | Req/s | Body bytes |\n"
+        "|---|---|---|---|---|---|---|---|"
+    )
+    rows = []
+    for (shape, concurrency), results in series.items():
+        sizes = sorted({r["response_bytes"] for r in results})
+        rows.append(
+            f"| {shape} | {concurrency} | {len(results)} | "
+            f"{_median_range([r['p50_ms'] for r in results])} | "
+            f"{_median_range([r['p95_ms'] for r in results])} | "
+            f"{_median_range([r['p99_ms'] for r in results])} | "
+            f"{_median_range([r['throughput_rps'] for r in results])} | "
+            f"{', '.join(str(s) for s in sizes)} |"
+        )
+    return "\n".join([header, *rows])
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -595,11 +631,20 @@ def main() -> None:
     run_cmd.add_argument("--warmup", type=int, default=DEFAULT_WARMUP)
     run_cmd.add_argument("--json-out", type=Path)
 
+    report_cmd = sub.add_parser("report", help="median and range across saved runs")
+    report_cmd.add_argument("files", nargs="+", type=Path, help="results written by run --json-out")
+
     args = parser.parse_args()
     if args.command == "seed":
         symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
         counts = asyncio.run(seed(symbols, args.end))
         print(json.dumps(counts, indent=2))
+        return
+    if args.command == "report":
+        documents = [json.loads(path.read_text()) for path in sorted(args.files)]
+        labels = {d["provenance"]["label"] for d in documents}
+        print(f"{len(documents)} runs, labelled {', '.join(sorted(labels))}")
+        print(runs_table(documents))
         return
 
     symbol = args.symbol.upper()

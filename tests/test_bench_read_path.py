@@ -115,6 +115,23 @@ def test_payload_description_counts_what_was_returned():
     assert payload.ratelimit_limit == "1000000"
 
 
+def test_the_runs_report_gives_the_median_and_range_per_series():
+    def run(p50: float, p95: float) -> dict:
+        row = {"shape": "default", "concurrency": 1, "p50_ms": p50, "p95_ms": p95,
+               "p99_ms": p95 + 5, "throughput_rps": 1000 / p50, "response_bytes": 44849}
+        return {"provenance": {"label": "synthetic-local"}, "results": [row]}
+
+    table = bench.runs_table([run(40.0, 50.0), run(30.0, 45.0), run(35.0, 47.0)])
+    row = table.splitlines()[2]
+
+    assert row.startswith("| default | 1 | 3 | 35 (30 to 40) | 47 (45 to 50) | 52 (50 to 55) |")
+    assert row.endswith("| 44849 |")
+
+
+def test_one_run_is_reported_without_a_range():
+    assert bench._median_range([12.5]) == "12.5"
+
+
 def test_seeding_refuses_a_database_not_named_for_benchmarks():
     with pytest.raises(SystemExit):
         bench._require_throwaway_database("postgresql+asyncpg://metrix:metrix@db:5432/metrix")
