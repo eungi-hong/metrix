@@ -1,0 +1,5884 @@
+{
+  "components": {
+    "schemas": {
+      "AbnormalTestOut": {
+        "properties": {
+          "abnormal_return": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Abnormal Return"
+          },
+          "floor": {
+            "title": "Floor",
+            "type": "number"
+          },
+          "floor_basis": {
+            "enum": [
+              "return",
+              "abnormal"
+            ],
+            "title": "Floor Basis",
+            "type": "string"
+          },
+          "k": {
+            "description": "MOVEMENT_ABNORMAL_K now (not stored per movement).",
+            "title": "K",
+            "type": "number"
+          },
+          "passed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when the movement could not be decomposed.",
+            "title": "Passed"
+          },
+          "sar": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sar"
+          }
+        },
+        "required": [
+          "sar",
+          "abnormal_return",
+          "k",
+          "floor_basis",
+          "floor",
+          "passed"
+        ],
+        "title": "AbnormalTestOut",
+        "type": "object"
+      },
+      "AppliedFiltersOut": {
+        "properties": {
+          "direction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/Direction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "dominant": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "market",
+                    "sector",
+                    "company"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dominant"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End"
+          },
+          "include_unqualified": {
+            "default": false,
+            "title": "Include Unqualified",
+            "type": "boolean"
+          },
+          "min_magnitude": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Magnitude"
+          },
+          "min_sar": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Sar"
+          },
+          "sort": {
+            "default": "date",
+            "enum": [
+              "date",
+              "abs_return",
+              "abs_sar",
+              "rvol"
+            ],
+            "title": "Sort",
+            "type": "string"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start"
+          },
+          "tiers": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RelevanceTier"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tiers"
+          },
+          "triggers": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "raw",
+                    "abnormal",
+                    "both"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Triggers"
+          }
+        },
+        "title": "AppliedFiltersOut",
+        "type": "object"
+      },
+      "ArticleOut": {
+        "properties": {
+          "author": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Author"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published At"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Publisher domain.",
+            "title": "Source"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "url",
+          "title",
+          "author",
+          "published_at",
+          "summary"
+        ],
+        "title": "ArticleOut",
+        "type": "object"
+      },
+      "ArticleSource": {
+        "properties": {
+          "article_id": {
+            "title": "Article Id",
+            "type": "integer"
+          },
+          "published_at": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Published At"
+          },
+          "ref": {
+            "description": "Citation label used in the answer, e.g. 'A3'.",
+            "title": "Ref",
+            "type": "string"
+          },
+          "relevance_score": {
+            "title": "Relevance Score",
+            "type": "number"
+          },
+          "relevance_tier": {
+            "title": "Relevance Tier",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "article_id",
+          "title",
+          "url",
+          "source",
+          "published_at",
+          "relevance_tier",
+          "relevance_score"
+        ],
+        "title": "ArticleSource",
+        "type": "object"
+      },
+      "BackfillQueued": {
+        "properties": {
+          "queued": {
+            "description": "Tickers with an analytics backfill job now active.",
+            "title": "Queued",
+            "type": "integer"
+          },
+          "symbols": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Symbols",
+            "type": "array"
+          }
+        },
+        "required": [
+          "queued",
+          "symbols"
+        ],
+        "title": "BackfillQueued",
+        "type": "object"
+      },
+      "BenchmarkPointOut": {
+        "properties": {
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "value": {
+            "description": "Adjusted close rebased to 100 on `base_date`.",
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "date",
+          "value"
+        ],
+        "title": "BenchmarkPointOut",
+        "type": "object"
+      },
+      "BenchmarkSeriesOut": {
+        "description": "A benchmark's adjusted close, rebased for a chart overlay.",
+        "properties": {
+          "base_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Base Date"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/BenchmarkPointOut"
+            },
+            "title": "Points",
+            "type": "array"
+          },
+          "role": {
+            "enum": [
+              "market",
+              "sector"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "role",
+          "base_date",
+          "points"
+        ],
+        "title": "BenchmarkSeriesOut",
+        "type": "object"
+      },
+      "ChatRequest": {
+        "properties": {
+          "conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Omit to start a new conversation; pass the id returned by a previous call to continue one.",
+            "title": "Conversation Id"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End"
+          },
+          "question": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Question",
+            "type": "string"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Restrict retrieval window.",
+            "title": "Start"
+          },
+          "ticker": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Optional. If omitted, the ticker is inferred from the question or carried over from the conversation.",
+            "title": "Ticker"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "ChatRequest",
+        "type": "object"
+      },
+      "ChatResponse": {
+        "properties": {
+          "answer": {
+            "title": "Answer",
+            "type": "string"
+          },
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "grounded": {
+            "description": "False when no stored movements matched, in which case the answer says so rather than speculating.",
+            "title": "Grounded",
+            "type": "boolean"
+          },
+          "sources": {
+            "$ref": "#/components/schemas/ChatSources"
+          },
+          "ticker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ticker"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "ticker",
+          "answer",
+          "sources",
+          "grounded"
+        ],
+        "title": "ChatResponse",
+        "type": "object"
+      },
+      "ChatSources": {
+        "properties": {
+          "articles": {
+            "items": {
+              "$ref": "#/components/schemas/ArticleSource"
+            },
+            "title": "Articles",
+            "type": "array"
+          },
+          "movements": {
+            "items": {
+              "$ref": "#/components/schemas/MovementSource"
+            },
+            "title": "Movements",
+            "type": "array"
+          }
+        },
+        "title": "ChatSources",
+        "type": "object"
+      },
+      "ConversationDetail": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/MessageOut"
+            },
+            "title": "Messages",
+            "type": "array"
+          },
+          "ticker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ticker"
+          }
+        },
+        "required": [
+          "id",
+          "ticker",
+          "created_at",
+          "messages"
+        ],
+        "title": "ConversationDetail",
+        "type": "object"
+      },
+      "ConversationList": {
+        "properties": {
+          "conversations": {
+            "items": {
+              "$ref": "#/components/schemas/ConversationSummary"
+            },
+            "title": "Conversations",
+            "type": "array"
+          },
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "total": {
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "conversations",
+          "limit",
+          "offset",
+          "total"
+        ],
+        "title": "ConversationList",
+        "type": "object"
+      },
+      "ConversationSummary": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_message_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Message At"
+          },
+          "messages": {
+            "description": "Messages in the conversation, questions and answers.",
+            "title": "Messages",
+            "type": "integer"
+          },
+          "ticker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ticker"
+          }
+        },
+        "required": [
+          "id",
+          "ticker",
+          "created_at",
+          "last_message_at",
+          "messages"
+        ],
+        "title": "ConversationSummary",
+        "type": "object"
+      },
+      "DeadJob": {
+        "properties": {
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "dedupe_key": {
+            "title": "Dedupe Key",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/JobKind"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "dedupe_key",
+          "attempts",
+          "last_error",
+          "finished_at"
+        ],
+        "title": "DeadJob",
+        "type": "object"
+      },
+      "DecompositionOut": {
+        "description": "The day's return in parts: alpha + market + sector + abnormal = daily_return.\n\nFrom a market model with an orthogonalised sector factor, estimated on\nthe sessions before the move. See README, \"How a movement is defined\".",
+        "properties": {
+          "abnormal": {
+            "description": "daily_return - expected: the company-specific part.",
+            "title": "Abnormal",
+            "type": "number"
+          },
+          "alpha": {
+            "description": "Daily intercept over the estimation window.",
+            "title": "Alpha",
+            "type": "number"
+          },
+          "beta_market": {
+            "title": "Beta Market",
+            "type": "number"
+          },
+          "beta_sector": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Loading on the sector's market-neutral return.",
+            "title": "Beta Sector"
+          },
+          "dominant": {
+            "description": "The largest of market, sector, company by size.",
+            "enum": [
+              "market",
+              "sector",
+              "company"
+            ],
+            "title": "Dominant",
+            "type": "string"
+          },
+          "estimation_sessions": {
+            "title": "Estimation Sessions",
+            "type": "integer"
+          },
+          "expected": {
+            "description": "alpha + market + sector.",
+            "title": "Expected",
+            "type": "number"
+          },
+          "market": {
+            "description": "beta_market * the market's return that day.",
+            "title": "Market",
+            "type": "number"
+          },
+          "market_benchmark": {
+            "title": "Market Benchmark",
+            "type": "string"
+          },
+          "model": {
+            "enum": [
+              "market_sector",
+              "market_only"
+            ],
+            "title": "Model",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A caveat, e.g. why the model is market only.",
+            "title": "Note"
+          },
+          "r_squared": {
+            "title": "R Squared",
+            "type": "number"
+          },
+          "sar": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Standardised abnormal return (forecast-error adjusted). A heuristic size in residual standard deviations, not a probability.",
+            "title": "Sar"
+          },
+          "sector": {
+            "description": "beta_sector * the sector's market-neutral return that day.",
+            "title": "Sector",
+            "type": "number"
+          },
+          "sector_benchmark": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null for a market-only model (no mapped sector).",
+            "title": "Sector Benchmark"
+          },
+          "sigma_e": {
+            "description": "Residual standard deviation, as a daily return.",
+            "title": "Sigma E",
+            "type": "number"
+          }
+        },
+        "required": [
+          "model",
+          "market_benchmark",
+          "estimation_sessions",
+          "alpha",
+          "beta_market",
+          "r_squared",
+          "sigma_e",
+          "market",
+          "sector",
+          "expected",
+          "abnormal",
+          "dominant"
+        ],
+        "title": "DecompositionOut",
+        "type": "object"
+      },
+      "DetectionAuditOut": {
+        "description": "Why the day was flagged: both tests, with their inputs.",
+        "properties": {
+          "abnormal": {
+            "$ref": "#/components/schemas/AbnormalTestOut"
+          },
+          "current_mode": {
+            "enum": [
+              "raw",
+              "abnormal",
+              "union"
+            ],
+            "title": "Current Mode",
+            "type": "string"
+          },
+          "qualifies": {
+            "title": "Qualifies",
+            "type": "boolean"
+          },
+          "raw": {
+            "$ref": "#/components/schemas/RawTestOut"
+          },
+          "trigger": {
+            "description": "raw, abnormal or both, as stored; raw for movements before v2.",
+            "title": "Trigger",
+            "type": "string"
+          }
+        },
+        "required": [
+          "trigger",
+          "qualifies",
+          "current_mode",
+          "raw",
+          "abnormal"
+        ],
+        "title": "DetectionAuditOut",
+        "type": "object"
+      },
+      "DigestHoldingOut": {
+        "properties": {
+          "contribution": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "weight x period_return, with weights over holdings that have data.",
+            "title": "Contribution"
+          },
+          "has_data": {
+            "title": "Has Data",
+            "type": "boolean"
+          },
+          "moves": {
+            "description": "Flagged movements in the period, newest first.",
+            "items": {
+              "$ref": "#/components/schemas/DigestMoveOut"
+            },
+            "title": "Moves",
+            "type": "array"
+          },
+          "period_return": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Compounded over the sessions; null without stored bars.",
+            "title": "Period Return"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "weight": {
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "required": [
+          "symbol",
+          "weight",
+          "has_data",
+          "period_return",
+          "contribution",
+          "moves"
+        ],
+        "title": "DigestHoldingOut",
+        "type": "object"
+      },
+      "DigestMoveOut": {
+        "properties": {
+          "abnormal_return": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Abnormal Return"
+          },
+          "daily_return": {
+            "title": "Daily Return",
+            "type": "number"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "evidence": {
+            "enum": [
+              "explained",
+              "abstained",
+              "no_evidence",
+              "researching",
+              "queued",
+              "budget_deferred",
+              "window_open",
+              "retrying",
+              "failed",
+              "not_started"
+            ],
+            "title": "Evidence",
+            "type": "string"
+          },
+          "explanation": {
+            "title": "Explanation",
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "daily_return",
+          "evidence",
+          "explanation"
+        ],
+        "title": "DigestMoveOut",
+        "type": "object"
+      },
+      "Direction": {
+        "enum": [
+          "up",
+          "down"
+        ],
+        "title": "Direction",
+        "type": "string"
+      },
+      "DriftOut": {
+        "description": "What happened next: cumulative abnormal return after the move, with the\nmodel fixed at the move. Null until those sessions exist.",
+        "properties": {
+          "car_20": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Car 20"
+          },
+          "car_5": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Car 5"
+          },
+          "label_20": {
+            "anyOf": [
+              {
+                "enum": [
+                  "continued",
+                  "held",
+                  "reversed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label 20"
+          },
+          "label_5": {
+            "anyOf": [
+              {
+                "enum": [
+                  "continued",
+                  "held",
+                  "reversed"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label 5"
+          }
+        },
+        "title": "DriftOut",
+        "type": "object"
+      },
+      "EarningsEventOut": {
+        "description": "An earnings release, from an 8-K with Item 2.02.",
+        "properties": {
+          "accepted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted At"
+          },
+          "accession": {
+            "title": "Accession",
+            "type": "string"
+          },
+          "filing_date": {
+            "format": "date",
+            "title": "Filing Date",
+            "type": "string"
+          },
+          "movement": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EarningsMovementOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The movement on that session, if the day was flagged."
+          },
+          "session": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The first session whose prices could reflect it.",
+            "title": "Session"
+          },
+          "timing": {
+            "enum": [
+              "before_open",
+              "during_session",
+              "after_close",
+              "unknown"
+            ],
+            "title": "Timing",
+            "type": "string"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "accession",
+          "accepted_at",
+          "filing_date",
+          "session",
+          "timing"
+        ],
+        "title": "EarningsEventOut",
+        "type": "object"
+      },
+      "EarningsMovementOut": {
+        "properties": {
+          "abnormal_return": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Abnormal Return"
+          },
+          "daily_return": {
+            "title": "Daily Return",
+            "type": "number"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "enum": [
+                  "explained",
+                  "abstained",
+                  "no_evidence",
+                  "researching",
+                  "queued",
+                  "budget_deferred",
+                  "window_open",
+                  "retrying",
+                  "failed",
+                  "not_started"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence"
+          }
+        },
+        "required": [
+          "date",
+          "daily_return"
+        ],
+        "title": "EarningsMovementOut",
+        "type": "object"
+      },
+      "EarningsOut": {
+        "properties": {
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/EarningsEventOut"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "note": {
+            "title": "Note",
+            "type": "string"
+          },
+          "source": {
+            "default": "sec_8k_item_2.02",
+            "title": "Source",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "events",
+          "note"
+        ],
+        "title": "EarningsOut",
+        "type": "object"
+      },
+      "EvidenceStatusOut": {
+        "description": "Where the movement's evidence stands and when it will be there.",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "expected_by": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When research may next start: the queued job's start time, the spend cap's reset, or the next nightly run. Null when nothing is owed.",
+            "title": "Expected By"
+          },
+          "state": {
+            "enum": [
+              "explained",
+              "abstained",
+              "no_evidence",
+              "researching",
+              "queued",
+              "budget_deferred",
+              "window_open",
+              "retrying",
+              "failed",
+              "not_started"
+            ],
+            "title": "State",
+            "type": "string"
+          },
+          "window_closes_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the movement's news window closes.",
+            "title": "Window Closes At"
+          }
+        },
+        "required": [
+          "state",
+          "detail"
+        ],
+        "title": "EvidenceStatusOut",
+        "type": "object"
+      },
+      "FilingOut": {
+        "description": "An SEC filing in the movement's window, with its session timing, and\nscorer v2's verdict on it when it was judged.",
+        "properties": {
+          "accepted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted At"
+          },
+          "accession": {
+            "title": "Accession",
+            "type": "string"
+          },
+          "events": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "form": {
+            "title": "Form",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "relevance_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relevance Score"
+          },
+          "relevance_tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relevance Tier"
+          },
+          "role": {
+            "anyOf": [
+              {
+                "enum": [
+                  "primary",
+                  "contributing",
+                  "context"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Role"
+          },
+          "timing": {
+            "anyOf": [
+              {
+                "enum": [
+                  "before_prior_close",
+                  "overnight",
+                  "intraday",
+                  "after_close",
+                  "later"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timing"
+          },
+          "timing_precision": {
+            "anyOf": [
+              {
+                "enum": [
+                  "time",
+                  "day"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Timing Precision"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "accession",
+          "form"
+        ],
+        "title": "FilingOut",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HoldingIn": {
+        "properties": {
+          "symbol": {
+            "maxLength": 16,
+            "minLength": 1,
+            "title": "Symbol",
+            "type": "string"
+          },
+          "weight": {
+            "anyOf": [
+              {
+                "exclusiveMinimum": 0.0,
+                "maximum": 1000000.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Any positive scale; normalised.",
+            "title": "Weight"
+          }
+        },
+        "required": [
+          "symbol"
+        ],
+        "title": "HoldingIn",
+        "type": "object"
+      },
+      "HoldingOut": {
+        "properties": {
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "weight": {
+            "description": "Normalised: the holdings' weights sum to 1.",
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "required": [
+          "symbol",
+          "weight"
+        ],
+        "title": "HoldingOut",
+        "type": "object"
+      },
+      "IngestStatus": {
+        "enum": [
+          "pending",
+          "running",
+          "complete",
+          "failed"
+        ],
+        "title": "IngestStatus",
+        "type": "string"
+      },
+      "JobCount": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/JobKind"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus"
+          }
+        },
+        "required": [
+          "kind",
+          "status",
+          "count"
+        ],
+        "title": "JobCount",
+        "type": "object"
+      },
+      "JobKind": {
+        "enum": [
+          "ingest_ticker",
+          "refresh_prices",
+          "prewarm_sector_macro",
+          "enrich_movement",
+          "schedule_nightly",
+          "refresh_symbol_directory",
+          "backfill_analytics"
+        ],
+        "title": "JobKind",
+        "type": "string"
+      },
+      "JobOut": {
+        "properties": {
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/JobKind"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "locked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When a worker claimed it, or last heartbeated.",
+            "title": "Locked At"
+          },
+          "max_attempts": {
+            "title": "Max Attempts",
+            "type": "integer"
+          },
+          "payload": {
+            "title": "Payload",
+            "type": "object"
+          },
+          "priority": {
+            "description": "Lower runs first. 0 means a user is waiting.",
+            "title": "Priority",
+            "type": "integer"
+          },
+          "progress": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Handler-reported progress, e.g. done/total.",
+            "title": "Progress"
+          },
+          "run_after": {
+            "description": "Not started before this instant.",
+            "format": "date-time",
+            "title": "Run After",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/components/schemas/JobSource"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus",
+            "description": "'queued' (including waiting to retry), 'running', 'succeeded', or 'dead' (gave up: a permanent error or too many attempts)."
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "status",
+          "source",
+          "priority",
+          "payload",
+          "attempts",
+          "max_attempts",
+          "run_after",
+          "created_at"
+        ],
+        "title": "JobOut",
+        "type": "object"
+      },
+      "JobSource": {
+        "description": "Why a job exists. Kept for metrics: who is the queue working for?",
+        "enum": [
+          "interactive",
+          "scheduled",
+          "followup"
+        ],
+        "title": "JobSource",
+        "type": "string"
+      },
+      "JobStatus": {
+        "description": "QUEUED and RUNNING are active; the rest are terminal.\n\nA failed attempt that will be retried goes back to QUEUED with a later\n`run_after`, so \"waiting to retry\" needs no state of its own. DEAD means\nthe queue gave up: a permanent error, or `max_attempts` used up. FAILED is\nterminal too, and is treated like DEAD wherever terminal states matter.",
+        "enum": [
+          "queued",
+          "running",
+          "succeeded",
+          "failed",
+          "dead"
+        ],
+        "title": "JobStatus",
+        "type": "string"
+      },
+      "KeyCreate": {
+        "properties": {
+          "label": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          }
+        },
+        "title": "KeyCreate",
+        "type": "object"
+      },
+      "KeyCreated": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "key": {
+            "description": "The API key. Shown this once; only its hash is stored.",
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "prefix": {
+            "description": "The key's first characters: how to recognise it, not use it.",
+            "title": "Prefix",
+            "type": "string"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "user_id",
+          "prefix",
+          "label",
+          "created_at",
+          "last_used_at",
+          "revoked_at",
+          "key"
+        ],
+        "title": "KeyCreated",
+        "type": "object"
+      },
+      "KeyOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "prefix": {
+            "description": "The key's first characters: how to recognise it, not use it.",
+            "title": "Prefix",
+            "type": "string"
+          },
+          "revoked_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Revoked At"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "user_id",
+          "prefix",
+          "label",
+          "created_at",
+          "last_used_at",
+          "revoked_at"
+        ],
+        "title": "KeyOut",
+        "type": "object"
+      },
+      "LegsOut": {
+        "description": "Where in the session the move happened. (1 + gap) * (1 + intraday) = 1 + daily_return.",
+        "properties": {
+          "gap": {
+            "description": "Prior adjusted close to the (adjusted) open.",
+            "title": "Gap",
+            "type": "number"
+          },
+          "intraday": {
+            "description": "Open to close.",
+            "title": "Intraday",
+            "type": "number"
+          }
+        },
+        "required": [
+          "gap",
+          "intraday"
+        ],
+        "title": "LegsOut",
+        "type": "object"
+      },
+      "LinkedArticleOut": {
+        "description": "An article together with the verdict connecting it to the movement.",
+        "properties": {
+          "article": {
+            "$ref": "#/components/schemas/ArticleOut"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "One line on why this article explains the move.",
+            "title": "Rationale"
+          },
+          "relevance_score": {
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Relevance Score",
+            "type": "number"
+          },
+          "relevance_tier": {
+            "$ref": "#/components/schemas/RelevanceTier",
+            "description": "What the article is: easy (company), medium (competitor/industry), or hard (macro/political)."
+          },
+          "role": {
+            "anyOf": [
+              {
+                "enum": [
+                  "primary",
+                  "contributing",
+                  "context"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Scorer v2 only: the cause, part of it, or background.",
+            "title": "Role"
+          },
+          "scorer_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "v1 or v2; null before v2 existed.",
+            "title": "Scorer Version"
+          },
+          "search_tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Which tier's search surfaced the article.",
+            "title": "Search Tier"
+          },
+          "timing": {
+            "anyOf": [
+              {
+                "enum": [
+                  "before_prior_close",
+                  "overnight",
+                  "intraday",
+                  "after_close",
+                  "later"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When it was published relative to the move's XNYS sessions (previous session P, the move's session T, the next session N): before_prior_close (at or before close(P)), overnight (close(P) to open(T)), intraday (open(T) to close(T)), after_close (close(T) to open(N)) or later. Only the first three can have caused T's close-to-close move. Null when unknown.",
+            "title": "Timing"
+          },
+          "timing_precision": {
+            "anyOf": [
+              {
+                "enum": [
+                  "time",
+                  "day"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "'time' when the publication time is known; 'day' when only the date is, in which case `timing` is set only if the whole day falls in one bucket.",
+            "title": "Timing Precision"
+          }
+        },
+        "required": [
+          "article",
+          "relevance_tier",
+          "relevance_score"
+        ],
+        "title": "LinkedArticleOut",
+        "type": "object"
+      },
+      "MarketPulseOut": {
+        "properties": {
+          "movers": {
+            "description": "Largest abnormal moves first.",
+            "items": {
+              "$ref": "#/components/schemas/PulseMoverOut"
+            },
+            "title": "Movers",
+            "type": "array"
+          },
+          "sectors": {
+            "description": "Benchmarks' compounded return over the sessions.",
+            "items": {
+              "$ref": "#/components/schemas/SectorReturnOut"
+            },
+            "title": "Sectors",
+            "type": "array"
+          },
+          "sessions": {
+            "description": "The sessions covered, latest last.",
+            "items": {
+              "format": "date",
+              "type": "string"
+            },
+            "title": "Sessions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "sessions",
+          "movers",
+          "sectors"
+        ],
+        "title": "MarketPulseOut",
+        "type": "object"
+      },
+      "MessageOut": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "sources": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChatSources"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For answers: what was in the prompt it was grounded in."
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "content",
+          "created_at"
+        ],
+        "title": "MessageOut",
+        "type": "object"
+      },
+      "MovementCaseOut": {
+        "properties": {
+          "benchmarks": {
+            "items": {
+              "$ref": "#/components/schemas/ReferenceReturnOut"
+            },
+            "title": "Benchmarks",
+            "type": "array"
+          },
+          "detection": {
+            "$ref": "#/components/schemas/DetectionAuditOut"
+          },
+          "movement": {
+            "$ref": "#/components/schemas/MovementOut"
+          },
+          "next_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The ticker's next movement.",
+            "title": "Next Date"
+          },
+          "peers": {
+            "description": "The ticker's peer set and how each did that session (prices only, refreshed nightly for the pre-warmed universe's peers).",
+            "items": {
+              "$ref": "#/components/schemas/ReferenceReturnOut"
+            },
+            "title": "Peers",
+            "type": "array"
+          },
+          "previous_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The ticker's previous movement.",
+            "title": "Previous Date"
+          },
+          "ticker": {
+            "$ref": "#/components/schemas/TickerOut"
+          }
+        },
+        "required": [
+          "ticker",
+          "movement",
+          "detection",
+          "benchmarks",
+          "peers"
+        ],
+        "title": "MovementCaseOut",
+        "type": "object"
+      },
+      "MovementOut": {
+        "description": "One detected major movement, with the audit trail for the decision.",
+        "properties": {
+          "abstain_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Abstain Reason"
+          },
+          "adj_close": {
+            "title": "Adj Close",
+            "type": "number"
+          },
+          "daily_return": {
+            "description": "Decimal fraction, e.g. -0.0412 = -4.12%.",
+            "title": "Daily Return",
+            "type": "number"
+          },
+          "daily_return_pct": {
+            "description": "Same figure in percent, for display.",
+            "title": "Daily Return Pct",
+            "type": "number"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "decomposition": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DecompositionOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when the day could not be decomposed."
+          },
+          "decomposition_warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why there is no decomposition, when there is none.",
+            "title": "Decomposition Warning"
+          },
+          "detector_floor": {
+            "title": "Detector Floor",
+            "type": "number"
+          },
+          "detector_k": {
+            "title": "Detector K",
+            "type": "number"
+          },
+          "detector_window": {
+            "title": "Detector Window",
+            "type": "integer"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/Direction"
+          },
+          "drift": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DriftOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidence": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/EvidenceStatusOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Why there is or is not evidence yet, and when there will be."
+          },
+          "evidence_abstained": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Scorer v2: true when it judged that nothing explains the move.",
+            "title": "Evidence Abstained"
+          },
+          "filings": {
+            "description": "SEC filings in the news window (when EDGAR is enabled).",
+            "items": {
+              "$ref": "#/components/schemas/FilingOut"
+            },
+            "title": "Filings",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "legs": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LegsOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "news": {
+            "items": {
+              "$ref": "#/components/schemas/LinkedArticleOut"
+            },
+            "title": "News",
+            "type": "array"
+          },
+          "news_status": {
+            "$ref": "#/components/schemas/NewsStatus"
+          },
+          "prev_adj_close": {
+            "title": "Prev Adj Close",
+            "type": "number"
+          },
+          "qualifies": {
+            "default": true,
+            "description": "False only with include_unqualified=true: a movement that no longer clears the threshold, kept because it was already researched.",
+            "title": "Qualifies",
+            "type": "boolean"
+          },
+          "regime": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RegimeOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rolling_std": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Stdev of the N returns before this day.",
+            "title": "Rolling Std"
+          },
+          "sigma_multiple": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Size of the move in standard deviations.",
+            "title": "Sigma Multiple"
+          },
+          "threshold": {
+            "description": "The bar this day had to clear.",
+            "title": "Threshold",
+            "type": "number"
+          },
+          "threshold_source": {
+            "description": "'floor' if the flat minimum bound the day, 'volatility' if k * rolling stdev did.",
+            "title": "Threshold Source",
+            "type": "string"
+          },
+          "trigger": {
+            "default": "raw",
+            "description": "Which detection test the day passed: raw (|r| >= max(floor, k * sigma)), abnormal (|SAR| >= MOVEMENT_ABNORMAL_K), or both.",
+            "enum": [
+              "raw",
+              "abnormal",
+              "both"
+            ],
+            "title": "Trigger",
+            "type": "string"
+          },
+          "volume": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Volume"
+          },
+          "volume_analysis": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VolumeAnalysisOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Relative volume. (`volume` above is the day's share volume.)"
+          }
+        },
+        "required": [
+          "id",
+          "date",
+          "daily_return",
+          "daily_return_pct",
+          "direction",
+          "prev_adj_close",
+          "adj_close",
+          "volume",
+          "threshold",
+          "threshold_source",
+          "detector_k",
+          "detector_window",
+          "detector_floor",
+          "news_status"
+        ],
+        "title": "MovementOut",
+        "type": "object"
+      },
+      "MovementSource": {
+        "description": "A movement that was injected into the prompt, with its citation label.",
+        "properties": {
+          "daily_return_pct": {
+            "title": "Daily Return Pct",
+            "type": "number"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "direction": {
+            "title": "Direction",
+            "type": "string"
+          },
+          "movement_id": {
+            "title": "Movement Id",
+            "type": "integer"
+          },
+          "ref": {
+            "description": "Citation label used in the answer, e.g. 'M1'.",
+            "title": "Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "movement_id",
+          "date",
+          "daily_return_pct",
+          "direction"
+        ],
+        "title": "MovementSource",
+        "type": "object"
+      },
+      "NewsStatus": {
+        "description": "Where a movement's news enrichment stands.\n\nPARTIAL -- enrichment ran, but before the news window closed, so articles\npublished later in the window may be missing. It is re-enriched once the\nwindow closes. COMPLETE is reserved for enrichment that ran after that.",
+        "enum": [
+          "pending",
+          "partial",
+          "complete",
+          "failed"
+        ],
+        "title": "NewsStatus",
+        "type": "string"
+      },
+      "PaginationOut": {
+        "properties": {
+          "limit": {
+            "title": "Limit",
+            "type": "integer"
+          },
+          "offset": {
+            "title": "Offset",
+            "type": "integer"
+          },
+          "returned": {
+            "title": "Returned",
+            "type": "integer"
+          },
+          "total": {
+            "description": "Movements matching the filters, before paging.",
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "limit",
+          "offset",
+          "total",
+          "returned"
+        ],
+        "title": "PaginationOut",
+        "type": "object"
+      },
+      "Plan": {
+        "description": "What a caller may do, and how much of it. Limits per plan come in with quotas.\n\n`anonymous` is never stored: it is the plan of an unauthenticated caller\nwhen AUTH_REQUIRED is off.",
+        "enum": [
+          "anonymous",
+          "free",
+          "pro",
+          "internal"
+        ],
+        "title": "Plan",
+        "type": "string"
+      },
+      "PrewarmRunOut": {
+        "properties": {
+          "duration_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Seconds"
+          },
+          "enrichment_budget": {
+            "title": "Enrichment Budget",
+            "type": "integer"
+          },
+          "enrichments_deferred": {
+            "title": "Enrichments Deferred",
+            "type": "integer"
+          },
+          "enrichments_queued": {
+            "title": "Enrichments Queued",
+            "type": "integer"
+          },
+          "enrichments_used": {
+            "title": "Enrichments Used",
+            "type": "integer"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "movements_found": {
+            "title": "Movements Found",
+            "type": "integer"
+          },
+          "started_at": {
+            "format": "date-time",
+            "title": "Started At",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PrewarmRunStatus"
+          },
+          "trading_date": {
+            "format": "date",
+            "title": "Trading Date",
+            "type": "string"
+          },
+          "universe_size": {
+            "title": "Universe Size",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "trading_date",
+          "status",
+          "started_at",
+          "finished_at",
+          "universe_size",
+          "movements_found",
+          "enrichments_queued",
+          "enrichments_used",
+          "enrichments_deferred",
+          "enrichment_budget"
+        ],
+        "title": "PrewarmRunOut",
+        "type": "object"
+      },
+      "PrewarmRunStatus": {
+        "enum": [
+          "running",
+          "finished"
+        ],
+        "title": "PrewarmRunStatus",
+        "type": "string"
+      },
+      "PrewarmTriggered": {
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "integer"
+          },
+          "trading_date": {
+            "format": "date",
+            "title": "Trading Date",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "trading_date"
+        ],
+        "title": "PrewarmTriggered",
+        "type": "object"
+      },
+      "PriceBarOut": {
+        "description": "One daily OHLCV bar.\n\nReturned only when `include_prices=true`: a year of bars is ~250 rows, which\nwould quadruple the size of every movement query that does not need them.",
+        "properties": {
+          "adj_close": {
+            "description": "Split- and dividend-adjusted close. Returns are computed from this.",
+            "title": "Adj Close",
+            "type": "number"
+          },
+          "close": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Close"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "High"
+          },
+          "low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Low"
+          },
+          "open": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Open"
+          },
+          "volume": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Volume"
+          }
+        },
+        "required": [
+          "date",
+          "open",
+          "high",
+          "low",
+          "close",
+          "adj_close",
+          "volume"
+        ],
+        "title": "PriceBarOut",
+        "type": "object"
+      },
+      "PriceRangeOut": {
+        "description": "Summary of the stored price history, always present.",
+        "properties": {
+          "bars": {
+            "title": "Bars",
+            "type": "integer"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "bars"
+        ],
+        "title": "PriceRangeOut",
+        "type": "object"
+      },
+      "PulseMoverOut": {
+        "properties": {
+          "abnormal_return": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Abnormal Return"
+          },
+          "company_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company Name"
+          },
+          "daily_return": {
+            "title": "Daily Return",
+            "type": "number"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "dominant": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dominant"
+          },
+          "evidence": {
+            "enum": [
+              "explained",
+              "abstained",
+              "no_evidence",
+              "researching",
+              "queued",
+              "budget_deferred",
+              "window_open",
+              "retrying",
+              "failed",
+              "not_started"
+            ],
+            "title": "Evidence",
+            "type": "string"
+          },
+          "explanation": {
+            "description": "The strongest linked evidence in one line, or why there is none.",
+            "title": "Explanation",
+            "type": "string"
+          },
+          "sar": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sar"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "company_name",
+          "date",
+          "daily_return",
+          "abnormal_return",
+          "sar",
+          "dominant",
+          "explanation",
+          "evidence"
+        ],
+        "title": "PulseMoverOut",
+        "type": "object"
+      },
+      "QueueSummary": {
+        "properties": {
+          "counts": {
+            "description": "Jobs by (kind, status).",
+            "items": {
+              "$ref": "#/components/schemas/JobCount"
+            },
+            "title": "Counts",
+            "type": "array"
+          },
+          "dead": {
+            "description": "The 20 most recent dead jobs.",
+            "items": {
+              "$ref": "#/components/schemas/DeadJob"
+            },
+            "title": "Dead",
+            "type": "array"
+          },
+          "held_by_spend_cap": {
+            "description": "Queued jobs waiting for the daily spend cap to reset.",
+            "title": "Held By Spend Cap",
+            "type": "integer"
+          },
+          "last_run": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PrewarmRunOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "oldest_queued_age_seconds": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How long the longest-waiting due job has waited; the number that grows when workers cannot keep up.",
+            "title": "Oldest Queued Age Seconds"
+          }
+        },
+        "required": [
+          "counts",
+          "oldest_queued_age_seconds",
+          "held_by_spend_cap",
+          "dead",
+          "last_run"
+        ],
+        "title": "QueueSummary",
+        "type": "object"
+      },
+      "RawTestOut": {
+        "properties": {
+          "daily_return": {
+            "title": "Daily Return",
+            "type": "number"
+          },
+          "floor": {
+            "title": "Floor",
+            "type": "number"
+          },
+          "k": {
+            "title": "K",
+            "type": "number"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          },
+          "rolling_std": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rolling Std"
+          },
+          "threshold": {
+            "description": "max(floor, k * rolling sigma), as stored at detection.",
+            "title": "Threshold",
+            "type": "number"
+          },
+          "threshold_source": {
+            "title": "Threshold Source",
+            "type": "string"
+          },
+          "window": {
+            "title": "Window",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "daily_return",
+          "threshold",
+          "threshold_source",
+          "rolling_std",
+          "k",
+          "window",
+          "floor",
+          "passed"
+        ],
+        "title": "RawTestOut",
+        "type": "object"
+      },
+      "ReferenceReturnOut": {
+        "description": "A peer's or benchmark's return over the same session.",
+        "properties": {
+          "daily_return": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Close to close on the movement's session; null when no bars are stored.",
+            "title": "Daily Return"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "role": {
+            "description": "competitor, supplier, customer, partner; or market, sector.",
+            "title": "Role",
+            "type": "string"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
+          }
+        },
+        "required": [
+          "symbol",
+          "role"
+        ],
+        "title": "ReferenceReturnOut",
+        "type": "object"
+      },
+      "RegimeOut": {
+        "description": "Volatility going into the move (the sessions before it, not including it).",
+        "properties": {
+          "percentile": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "0 to 100, against the same measure over the past year.",
+            "title": "Percentile"
+          },
+          "realized_vol": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Annualised.",
+            "title": "Realized Vol"
+          },
+          "window_sessions": {
+            "title": "Window Sessions",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "window_sessions"
+        ],
+        "title": "RegimeOut",
+        "type": "object"
+      },
+      "RelevanceTier": {
+        "description": "How an article explains a movement.\n\nEASY   -- about the company itself (earnings, launches, lawsuits).\nMEDIUM -- about a competitor, supplier, or the industry at large.\nHARD   -- macro / political / regulatory, company need not be mentioned.",
+        "enum": [
+          "easy",
+          "medium",
+          "hard"
+        ],
+        "title": "RelevanceTier",
+        "type": "string"
+      },
+      "RequestInfo": {
+        "properties": {
+          "client_ip": {
+            "description": "Who this request counts as under the current setting.",
+            "title": "Client Ip",
+            "type": "string"
+          },
+          "client_ip_by_trusted_count": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Who it would count as with TRUSTED_PROXY_COUNT set to each value.",
+            "title": "Client Ip By Trusted Count",
+            "type": "object"
+          },
+          "forwarded": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Forwarded"
+          },
+          "hops": {
+            "description": "X-Forwarded-For split, leftmost (client-written) first.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Hops",
+            "type": "array"
+          },
+          "peer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The socket peer: the last proxy, behind one.",
+            "title": "Peer"
+          },
+          "trusted_proxy_count": {
+            "title": "Trusted Proxy Count",
+            "type": "integer"
+          },
+          "x_forwarded_for": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "X Forwarded For"
+          },
+          "x_real_ip": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "X Real Ip"
+          }
+        },
+        "required": [
+          "peer",
+          "x_forwarded_for",
+          "hops",
+          "x_real_ip",
+          "forwarded",
+          "trusted_proxy_count",
+          "client_ip",
+          "client_ip_by_trusted_count"
+        ],
+        "title": "RequestInfo",
+        "type": "object"
+      },
+      "SectorReturnOut": {
+        "properties": {
+          "sector": {
+            "title": "Sector",
+            "type": "string"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          },
+          "total_return": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Compounded over the sessions; null without bars.",
+            "title": "Total Return"
+          }
+        },
+        "required": [
+          "sector",
+          "symbol",
+          "total_return"
+        ],
+        "title": "SectorReturnOut",
+        "type": "object"
+      },
+      "SpendByOperation": {
+        "properties": {
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "cost_usd": {
+            "title": "Cost Usd",
+            "type": "string"
+          },
+          "estimated_calls": {
+            "description": "Calls whose cost is an estimate, not the provider's figure.",
+            "title": "Estimated Calls",
+            "type": "integer"
+          },
+          "operation": {
+            "title": "Operation",
+            "type": "string"
+          },
+          "provider": {
+            "title": "Provider",
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider",
+          "operation",
+          "calls",
+          "cost_usd",
+          "estimated_calls"
+        ],
+        "title": "SpendByOperation",
+        "type": "object"
+      },
+      "SpendByUser": {
+        "properties": {
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "cost_usd": {
+            "title": "Cost Usd",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "user_id",
+          "calls",
+          "cost_usd"
+        ],
+        "title": "SpendByUser",
+        "type": "object"
+      },
+      "SymbolMatchOut": {
+        "properties": {
+          "exchange": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exchange"
+          },
+          "has_data": {
+            "description": "Metrix already holds researched data for it.",
+            "title": "Has Data",
+            "type": "boolean"
+          },
+          "is_etf": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Etf"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "has_data"
+        ],
+        "title": "SymbolMatchOut",
+        "type": "object"
+      },
+      "SymbolSearchOut": {
+        "properties": {
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/SymbolMatchOut"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "query",
+          "results"
+        ],
+        "title": "SymbolSearchOut",
+        "type": "object"
+      },
+      "TickerDetailOut": {
+        "description": "The ticker endpoint's payload.",
+        "properties": {
+          "benchmarks": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/BenchmarkSeriesOut"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "With include_benchmarks=true: the market and sector benchmarks over the same dates as the ticker's bars, rebased to 100 on its first bar in range.",
+            "title": "Benchmarks"
+          },
+          "filters": {
+            "$ref": "#/components/schemas/AppliedFiltersOut"
+          },
+          "ingest_status": {
+            "$ref": "#/components/schemas/IngestStatus"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The queued ingestion job, when this request started or joined one. Follow it at GET /jobs/{job_id}.",
+            "title": "Job Id"
+          },
+          "last_ingested_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Ingested At"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "movements": {
+            "items": {
+              "$ref": "#/components/schemas/MovementOut"
+            },
+            "title": "Movements",
+            "type": "array"
+          },
+          "pagination": {
+            "$ref": "#/components/schemas/PaginationOut"
+          },
+          "price_range": {
+            "$ref": "#/components/schemas/PriceRangeOut"
+          },
+          "prices": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/PriceBarOut"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The daily bars themselves, honouring `start`/`end`. Present only when requested with `include_prices=true`.",
+            "title": "Prices"
+          },
+          "status": {
+            "description": "'ready' -- data is fresh. 'ingesting' -- first-time fetch is running, movements will be empty. 'refreshing' -- stale data is shown while a refresh runs. 'failed' -- the last ingestion failed.",
+            "enum": [
+              "ready",
+              "ingesting",
+              "refreshing",
+              "failed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "ticker": {
+            "$ref": "#/components/schemas/TickerOut"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "status",
+          "ticker",
+          "ingest_status",
+          "last_ingested_at",
+          "price_range",
+          "filters",
+          "pagination",
+          "movements"
+        ],
+        "title": "TickerDetailOut",
+        "type": "object"
+      },
+      "TickerFilingOut": {
+        "properties": {
+          "accepted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted At"
+          },
+          "accession": {
+            "title": "Accession",
+            "type": "string"
+          },
+          "events": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "filing_date": {
+            "format": "date",
+            "title": "Filing Date",
+            "type": "string"
+          },
+          "form": {
+            "title": "Form",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "movement_dates": {
+            "description": "Movements whose news window this filing falls in.",
+            "items": {
+              "format": "date",
+              "type": "string"
+            },
+            "title": "Movement Dates",
+            "type": "array"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "accession",
+          "form",
+          "filing_date"
+        ],
+        "title": "TickerFilingOut",
+        "type": "object"
+      },
+      "TickerFilingsOut": {
+        "properties": {
+          "filings": {
+            "items": {
+              "$ref": "#/components/schemas/TickerFilingOut"
+            },
+            "title": "Filings",
+            "type": "array"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "filings"
+        ],
+        "title": "TickerFilingsOut",
+        "type": "object"
+      },
+      "TickerOut": {
+        "properties": {
+          "company_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Company Name"
+          },
+          "currency": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Currency"
+          },
+          "exchange": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exchange"
+          },
+          "industry": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Industry"
+          },
+          "sector": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sector"
+          },
+          "symbol": {
+            "title": "Symbol",
+            "type": "string"
+          }
+        },
+        "required": [
+          "symbol",
+          "company_name",
+          "sector",
+          "industry",
+          "exchange",
+          "currency"
+        ],
+        "title": "TickerOut",
+        "type": "object"
+      },
+      "UsageSummary": {
+        "description": "One UTC day's spend. Ledger figures are settled calls only; calls in\nflight show under `reserved_usd`.",
+        "properties": {
+          "background_cap_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Background Cap Usd"
+          },
+          "background_capped": {
+            "description": "A background call has been refused today.",
+            "title": "Background Capped",
+            "type": "boolean"
+          },
+          "background_headroom_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What background calls may still spend today.",
+            "title": "Background Headroom Usd"
+          },
+          "background_usd": {
+            "title": "Background Usd",
+            "type": "string"
+          },
+          "by_operation": {
+            "items": {
+              "$ref": "#/components/schemas/SpendByOperation"
+            },
+            "title": "By Operation",
+            "type": "array"
+          },
+          "calls": {
+            "title": "Calls",
+            "type": "integer"
+          },
+          "cap_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "DAILY_SPEND_CAP_USD; null means unlimited.",
+            "title": "Cap Usd"
+          },
+          "date": {
+            "format": "date",
+            "title": "Date",
+            "type": "string"
+          },
+          "headroom_usd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "What interactive calls may still spend today.",
+            "title": "Headroom Usd"
+          },
+          "interactive_capped": {
+            "description": "An interactive call has been refused today.",
+            "title": "Interactive Capped",
+            "type": "boolean"
+          },
+          "interactive_usd": {
+            "title": "Interactive Usd",
+            "type": "string"
+          },
+          "reserved_usd": {
+            "description": "Set aside by calls still in flight.",
+            "title": "Reserved Usd",
+            "type": "string"
+          },
+          "top_users": {
+            "description": "The 10 users who spent most.",
+            "items": {
+              "$ref": "#/components/schemas/SpendByUser"
+            },
+            "title": "Top Users",
+            "type": "array"
+          },
+          "total_usd": {
+            "title": "Total Usd",
+            "type": "string"
+          }
+        },
+        "required": [
+          "date",
+          "total_usd",
+          "background_usd",
+          "interactive_usd",
+          "calls",
+          "by_operation",
+          "top_users",
+          "cap_usd",
+          "background_cap_usd",
+          "reserved_usd",
+          "headroom_usd",
+          "background_headroom_usd",
+          "interactive_capped",
+          "background_capped"
+        ],
+        "title": "UsageSummary",
+        "type": "object"
+      },
+      "UserCreate": {
+        "properties": {
+          "email": {
+            "anyOf": [
+              {
+                "maxLength": 320,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "plan": {
+            "default": "free",
+            "enum": [
+              "free",
+              "pro",
+              "internal"
+            ],
+            "title": "Plan",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "UserCreate",
+        "type": "object"
+      },
+      "UserOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "disabled_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disabled At"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/Plan"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "email",
+          "plan",
+          "created_at",
+          "disabled_at"
+        ],
+        "title": "UserOut",
+        "type": "object"
+      },
+      "UserPatch": {
+        "properties": {
+          "disabled": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "true disables the user (every key stops working); false re-enables.",
+            "title": "Disabled"
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "enum": [
+                  "free",
+                  "pro",
+                  "internal"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan"
+          }
+        },
+        "title": "UserPatch",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "VolumeAnalysisOut": {
+        "properties": {
+          "lookback_sessions": {
+            "title": "Lookback Sessions",
+            "type": "integer"
+          },
+          "relative_volume": {
+            "description": "The day's volume over the median of the sessions before it.",
+            "title": "Relative Volume",
+            "type": "number"
+          }
+        },
+        "required": [
+          "relative_volume",
+          "lookback_sessions"
+        ],
+        "title": "VolumeAnalysisOut",
+        "type": "object"
+      },
+      "WatchlistDigestOut": {
+        "properties": {
+          "holdings": {
+            "items": {
+              "$ref": "#/components/schemas/DigestHoldingOut"
+            },
+            "title": "Holdings",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "missing": {
+            "description": "Holdings with no stored prices; GET /tickers/{symbol} fetches them.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Missing",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "period_return": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Sum of the contributions.",
+            "title": "Period Return"
+          },
+          "sessions": {
+            "items": {
+              "format": "date",
+              "type": "string"
+            },
+            "title": "Sessions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "sessions",
+          "period_return",
+          "holdings"
+        ],
+        "title": "WatchlistDigestOut",
+        "type": "object"
+      },
+      "WatchlistIn": {
+        "properties": {
+          "holdings": {
+            "items": {
+              "$ref": "#/components/schemas/HoldingIn"
+            },
+            "maxItems": 50,
+            "title": "Holdings",
+            "type": "array"
+          },
+          "name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "WatchlistIn",
+        "type": "object"
+      },
+      "WatchlistOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "holdings": {
+            "items": {
+              "$ref": "#/components/schemas/HoldingOut"
+            },
+            "title": "Holdings",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "weighted": {
+            "description": "False: equal weights.",
+            "title": "Weighted",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "weighted",
+          "holdings",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "WatchlistOut",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "HTTPBearer": {
+        "description": "An API key: mtx_...",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Explains major stock price movements using the news that caused them.\n\nA movement is a day where `|return| >= max(floor, k * rolling_std)` -- a flat\nfloor so quiet stocks are not flagged on noise, and a volatility term so the\nbar adapts to each stock's own regime.\n\nNews is searched in three tiers and then scored by an LLM for whether it\nactually explains the move: **easy** (company-specific), **medium**\n(competitor / industry) and **hard** (macro, political, regulatory).\n",
+    "title": "Metrix -- Stock Movement News Explainer",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/admin/backfill-analytics": {
+      "post": {
+        "description": "One `backfill_analytics` job per ticker with stored prices, benchmarks\nexcepted. Free: no news, no LLM; it fetches deeper price history from\nyfinance only where a ticker's stored bars are too short. Safe to repeat:\na ticker's job is deduplicated while active.",
+        "operationId": "trigger_backfill_analytics_admin_backfill_analytics_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Token"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BackfillQueued"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Queue the decomposition and analytics backfill for every stored ticker",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/keys/{key_id}": {
+      "delete": {
+        "operationId": "revoke_key_admin_keys__key_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key_id",
+            "required": true,
+            "schema": {
+              "title": "Key Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revoke an API key",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/prewarm": {
+      "post": {
+        "operationId": "trigger_prewarm_admin_prewarm_post",
+        "parameters": [
+          {
+            "description": "Which date the run is recorded under. Defaults to today in the schedule's time zone. One run per date.",
+            "in": "query",
+            "name": "trading_date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Which date the run is recorded under. Defaults to today in the schedule's time zone. One run per date.",
+              "title": "Trading Date"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Token"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrewarmTriggered"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start a pre-warm run now, outside the nightly schedule",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/queue": {
+      "get": {
+        "operationId": "queue_summary_admin_queue_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueueSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Queue health and the last run",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/request-info": {
+      "get": {
+        "description": "How many proxies sit in front of the API cannot be read from the\nconfiguration; it has to be measured. Call this through the public URL,\nonce as is and once with a forged X-Forwarded-For: the right\nTRUSTED_PROXY_COUNT is the one that gives your real address both times.\nOnly forwarding headers are echoed back.",
+        "operationId": "request_info_admin_request_info_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestInfo"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "What this request looks like on arrival, to set TRUSTED_PROXY_COUNT",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/usage": {
+      "get": {
+        "operationId": "usage_summary_admin_usage_get",
+        "parameters": [
+          {
+            "description": "UTC date. Defaults to today.",
+            "in": "query",
+            "name": "date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "UTC date. Defaults to today.",
+              "title": "Date"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Where the money went on one day",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/users": {
+      "post": {
+        "operationId": "create_user_admin_users_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "x-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create a user",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/users/{user_id}": {
+      "patch": {
+        "operationId": "update_user_admin_users__user_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserPatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Change a user's plan, or disable them",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/users/{user_id}/keys": {
+      "post": {
+        "operationId": "create_key_admin_users__user_id__keys_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Token"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeyCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeyCreated"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Issue an API key. The response is the only time the key is shown",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/chat": {
+      "post": {
+        "description": "Answer `question` from stored movements and linked news.\n\nPass `conversation_id` from a previous response to continue a conversation;\nomit it to start one. Only your own conversations can be continued: any\nother id, including one that exists, is a 404. The ticker may be given\nexplicitly, inferred from the question, or carried over from the\nconversation.\n\nEach turn counts against `chat_per_minute` and `chat_per_day`, and is\ngiven back if the answer fails on our side (the model is down or too busy,\nor the daily spend cap is reached). A turn made with the caller's own\nprovider keys counts against neither: it spends nothing of ours.",
+        "operationId": "chat_chat_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Exa-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Exa-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-OpenAI-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Openai-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Ask a question about a ticker's movements, answered from stored data",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/conversations": {
+      "get": {
+        "operationId": "list_conversations_conversations_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationList"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Your conversations, most recently active first",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/conversations/{conversation_id}": {
+      "get": {
+        "operationId": "get_conversation_conversations__conversation_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "conversation_id",
+            "required": true,
+            "schema": {
+              "title": "Conversation Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConversationDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "One of your conversations, with every message and its sources",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/events": {
+      "get": {
+        "operationId": "ticker_events_events_get",
+        "parameters": [
+          {
+            "description": "The ticker to follow.",
+            "in": "query",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "description": "The ticker to follow.",
+              "title": "Symbol",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {}
+            },
+            "description": "`job` events (id, kind, status, progress) for the ticker's jobs, and `ticker_updated` (symbol, data_version) when its data changes. A comment line is sent as a heartbeat; the stream ends after a few minutes and the client reconnects."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "description": "This process has too many open streams; retry shortly."
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Live updates for one ticker (server-sent events)",
+        "tags": [
+          "events"
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "health_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Health Health Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Service health and which integrations are configured",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/health/live": {
+      "get": {
+        "operationId": "live_health_live_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Live Health Live Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Liveness: the process is serving",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "operationId": "ready_health_ready_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "title": "Response Ready Health Ready Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "503": {
+            "description": "Postgres is unreachable"
+          }
+        },
+        "summary": "Readiness: 200 when the database is reachable, else 503",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/jobs/{job_id}": {
+      "get": {
+        "operationId": "get_job_jobs__job_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Status, attempts, progress and errors for one background job",
+        "tags": [
+          "jobs"
+        ]
+      }
+    },
+    "/market/pulse": {
+      "get": {
+        "description": "Across every ticker Metrix holds (the pre-warmed universe, plus anything\nrequested): the latest sessions' movements, largest standardised abnormal\nreturn first, each with its strongest evidence in a line.",
+        "operationId": "market_pulse_market_pulse_get",
+        "parameters": [
+          {
+            "description": "How many recent sessions.",
+            "in": "query",
+            "name": "sessions",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "description": "How many recent sessions.",
+              "maximum": 10,
+              "minimum": 1,
+              "title": "Sessions",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketPulseOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "The largest abnormal moves and sector returns",
+        "tags": [
+          "research"
+        ]
+      }
+    },
+    "/symbols/search": {
+      "get": {
+        "description": "Exact symbol first, then symbol prefixes, then names starting with the\nquery, then names with a word starting with it, then names containing it. Searches the US symbol directory and the\ntickers Metrix holds (which covers a deployment whose directory is empty).\nOn Postgres a trigram index serves the name match.",
+        "operationId": "search_symbols_symbols_search_get",
+        "parameters": [
+          {
+            "description": "A symbol prefix or part of a company name.",
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "description": "A symbol prefix or part of a company name.",
+              "maxLength": 40,
+              "minLength": 1,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "maximum": 25,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SymbolSearchOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Find a ticker by symbol or company name",
+        "tags": [
+          "research"
+        ]
+      }
+    },
+    "/tickers/{symbol}": {
+      "get": {
+        "operationId": "get_ticker_detail_tickers__symbol__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "title": "Symbol",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only movements on or after this date.",
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only movements on or after this date.",
+              "title": "Start"
+            }
+          },
+          {
+            "description": "Only movements on or before this date.",
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only movements on or before this date.",
+              "title": "End"
+            }
+          },
+          {
+            "description": "Only movements at least this large, in percent (e.g. 5 = 5%).",
+            "in": "query",
+            "name": "min_magnitude_pct",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 100.0,
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only movements at least this large, in percent (e.g. 5 = 5%).",
+              "title": "Min Magnitude Pct"
+            }
+          },
+          {
+            "description": "Filter to up or down days.",
+            "in": "query",
+            "name": "direction",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/Direction"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter to up or down days.",
+              "title": "Direction"
+            }
+          },
+          {
+            "description": "Relevance tier(s) to include. Repeat the parameter for several. Movements with no news in these tiers are excluded.",
+            "in": "query",
+            "name": "tier",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "$ref": "#/components/schemas/RelevanceTier"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Relevance tier(s) to include. Repeat the parameter for several. Movements with no news in these tiers are excluded.",
+              "title": "Tier"
+            }
+          },
+          {
+            "description": "Which detection test flagged the movement: raw, abnormal, both. Repeat for several.",
+            "in": "query",
+            "name": "trigger",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "raw",
+                      "abnormal",
+                      "both"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Which detection test flagged the movement: raw, abnormal, both. Repeat for several.",
+              "title": "Trigger"
+            }
+          },
+          {
+            "description": "Movements whose largest component was market, sector or company. Excludes movements that could not be decomposed.",
+            "in": "query",
+            "name": "dominant",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "enum": [
+                      "market",
+                      "sector",
+                      "company"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Movements whose largest component was market, sector or company. Excludes movements that could not be decomposed.",
+              "title": "Dominant"
+            }
+          },
+          {
+            "description": "Only movements whose standardised abnormal return is at least this large in either direction. Excludes movements without one.",
+            "in": "query",
+            "name": "min_sar",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Only movements whose standardised abnormal return is at least this large in either direction. Excludes movements without one.",
+              "title": "Min Sar"
+            }
+          },
+          {
+            "description": "Largest first: date (newest), abs_return, abs_sar, or rvol (relative volume). Movements without the value sort last.",
+            "in": "query",
+            "name": "sort",
+            "required": false,
+            "schema": {
+              "default": "date",
+              "description": "Largest first: date (newest), abs_return, abs_sar, or rvol (relative volume). Movements without the value sort last.",
+              "enum": [
+                "date",
+                "abs_return",
+                "abs_sar",
+                "rvol"
+              ],
+              "title": "Sort",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Also return stored movements that no longer clear the threshold but were kept because they had been researched (qualifies=false).",
+            "in": "query",
+            "name": "include_unqualified",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Also return stored movements that no longer clear the threshold but were kept because they had been researched (qualifies=false).",
+              "title": "Include Unqualified",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Also return the market and sector benchmarks, rebased to 100, for a chart overlay. Honours `start`/`end`.",
+            "in": "query",
+            "name": "include_benchmarks",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Also return the market and sector benchmarks, rebased to 100, for a chart overlay. Honours `start`/`end`.",
+              "title": "Include Benchmarks",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Include the daily OHLCV bars themselves, not just a summary. Honours `start`/`end`. Off by default because a year of bars is ~250 rows that most callers do not need.",
+            "in": "query",
+            "name": "include_prices",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Include the daily OHLCV bars themselves, not just a summary. Honours `start`/`end`. Off by default because a year of bars is ~250 rows that most callers do not need.",
+              "title": "Include Prices",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Force re-ingestion even if data is fresh.",
+            "in": "query",
+            "name": "refresh",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Force re-ingestion even if data is fresh.",
+              "title": "Refresh",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Run a needed ingestion inline and return the finished data. Slower (it calls yfinance, the news API and the LLM), but convenient for a first request against a cold ticker.",
+            "in": "query",
+            "name": "wait",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Run a needed ingestion inline and return the finished data. Slower (it calls yfinance, the news API and the LLM), but convenient for a first request against a cold ticker.",
+              "title": "Wait",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-Exa-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Exa-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-OpenAI-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Openai-Api-Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TickerDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "304": {
+            "description": "Not modified: the `If-None-Match` ETag is current."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Stock movements for a ticker, each with the news that explains it",
+        "tags": [
+          "tickers"
+        ]
+      }
+    },
+    "/tickers/{symbol}/earnings": {
+      "get": {
+        "description": "From 8-K filings with Item 2.02 (results of operations), each placed on\nthe first session whose prices could reflect it, with the movement on that\nsession when the day was flagged. No estimates or surprises yet.",
+        "operationId": "ticker_earnings_tickers__symbol__earnings_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "title": "Symbol",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EarningsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Earnings releases and the moves after them",
+        "tags": [
+          "research"
+        ]
+      }
+    },
+    "/tickers/{symbol}/filings": {
+      "get": {
+        "operationId": "ticker_filings_tickers__symbol__filings_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "title": "Symbol",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Forms to include (8-K, 10-Q, ...). Repeat for several.",
+            "in": "query",
+            "name": "form",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Forms to include (8-K, 10-Q, ...). Repeat for several.",
+              "title": "Form"
+            }
+          },
+          {
+            "description": "8-K items to include (2.02, 5.02, ...).",
+            "in": "query",
+            "name": "item",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "8-K items to include (2.02, 5.02, ...).",
+              "title": "Item"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "End"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TickerFilingsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "A ticker's stored SEC filings",
+        "tags": [
+          "research"
+        ]
+      }
+    },
+    "/tickers/{symbol}/movements/{day}": {
+      "get": {
+        "operationId": "movement_case_tickers__symbol__movements__day__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "symbol",
+            "required": true,
+            "schema": {
+              "title": "Symbol",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "day",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "Day",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MovementCaseOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "304": {
+            "description": "Not modified"
+          },
+          "404": {
+            "description": "No such ticker or movement"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "One movement's case file: decomposition, evidence, peers and the detection audit",
+        "tags": [
+          "research"
+        ]
+      }
+    },
+    "/watchlists": {
+      "get": {
+        "operationId": "list_watchlists_watchlists_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WatchlistOut"
+                  },
+                  "title": "Response List Watchlists Watchlists Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Your watchlists",
+        "tags": [
+          "watchlists"
+        ]
+      },
+      "post": {
+        "operationId": "create_watchlist_watchlists_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WatchlistIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WatchlistOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Create a watchlist",
+        "tags": [
+          "watchlists"
+        ]
+      }
+    },
+    "/watchlists/{watchlist_id}": {
+      "delete": {
+        "operationId": "delete_watchlist_watchlists__watchlist_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "watchlist_id",
+            "required": true,
+            "schema": {
+              "title": "Watchlist Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Delete a watchlist",
+        "tags": [
+          "watchlists"
+        ]
+      },
+      "get": {
+        "operationId": "get_watchlist_watchlists__watchlist_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "watchlist_id",
+            "required": true,
+            "schema": {
+              "title": "Watchlist Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WatchlistOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "One watchlist",
+        "tags": [
+          "watchlists"
+        ]
+      },
+      "put": {
+        "operationId": "replace_watchlist_watchlists__watchlist_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "watchlist_id",
+            "required": true,
+            "schema": {
+              "title": "Watchlist Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WatchlistIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WatchlistOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Replace a watchlist's name and holdings",
+        "tags": [
+          "watchlists"
+        ]
+      }
+    },
+    "/watchlists/{watchlist_id}/digest": {
+      "get": {
+        "operationId": "watchlist_digest_watchlists__watchlist_id__digest_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "watchlist_id",
+            "required": true,
+            "schema": {
+              "title": "Watchlist Id",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sessions",
+            "required": false,
+            "schema": {
+              "default": 5,
+              "maximum": 60,
+              "minimum": 1,
+              "title": "Sessions",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WatchlistDigestOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Each holding's moves and contribution over the last sessions",
+        "tags": [
+          "watchlists"
+        ]
+      }
+    }
+  }
+}
