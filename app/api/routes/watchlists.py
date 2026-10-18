@@ -45,7 +45,7 @@ def _owned_by(principal: Principal) -> sa.ColumnElement[bool]:
     return sa.and_(Watchlist.user_id.is_(None), Watchlist.anonymous_key == principal.key)
 
 
-async def _get_owned(session: AsyncSession, principal: Principal, watchlist_id: int) -> Watchlist:
+async def get_owned(session: AsyncSession, principal: Principal, watchlist_id: int) -> Watchlist:
     watchlist = await session.scalar(sa.select(Watchlist).where(Watchlist.id == watchlist_id, _owned_by(principal)))
     if watchlist is None:
         raise HTTPException(status_code=404, detail="No such watchlist.")
@@ -114,14 +114,14 @@ async def create_watchlist(body: WatchlistIn, session: SessionDep, principal: Cu
 
 @router.get("/watchlists/{watchlist_id}", response_model=WatchlistOut, summary="One watchlist")
 async def get_watchlist(watchlist_id: int, session: SessionDep, principal: CurrentUser) -> WatchlistOut:
-    return _out(await _get_owned(session, principal, watchlist_id))
+    return _out(await get_owned(session, principal, watchlist_id))
 
 
 @router.put("/watchlists/{watchlist_id}", response_model=WatchlistOut, summary="Replace a watchlist's name and holdings")
 async def replace_watchlist(
     watchlist_id: int, body: WatchlistIn, session: SessionDep, principal: CurrentUser
 ) -> WatchlistOut:
-    watchlist = await _get_owned(session, principal, watchlist_id)
+    watchlist = await get_owned(session, principal, watchlist_id)
     holdings = await _holdings(session, body)
     watchlist.name = body.name
     watchlist.holdings.clear()
@@ -135,7 +135,7 @@ async def replace_watchlist(
 
 @router.delete("/watchlists/{watchlist_id}", status_code=204, summary="Delete a watchlist")
 async def delete_watchlist(watchlist_id: int, session: SessionDep, principal: CurrentUser) -> Response:
-    await session.delete(await _get_owned(session, principal, watchlist_id))
+    await session.delete(await get_owned(session, principal, watchlist_id))
     await session.commit()
     return Response(status_code=204)
 
@@ -152,7 +152,14 @@ async def watchlist_digest(
     response: Response,
     sessions_back: int = Query(5, alias="sessions", ge=1, le=60),
 ) -> WatchlistDigestOut:
-    watchlist = await _get_owned(session, principal, watchlist_id)
+    watchlist = await get_owned(session, principal, watchlist_id)
+    response.headers["Cache-Control"] = "private, max-age=60"
+    return await build_digest(session, watchlist, sessions_back)
+
+
+async def build_digest(session: AsyncSession, watchlist: Watchlist, sessions_back: int) -> WatchlistDigestOut:
+    """The digest of one watchlist (ownership already checked). Also used by
+    Ask Metrix's get_watchlist_digest tool."""
     symbols = [h.symbol for h in watchlist.holdings]
     tickers = {
         t.symbol: t
@@ -220,7 +227,6 @@ async def watchlist_digest(
             )
         )
     contributions = [h.contribution for h in holdings_out if h.contribution is not None]
-    response.headers["Cache-Control"] = "private, max-age=60"
     return WatchlistDigestOut(
         id=watchlist.id,
         name=watchlist.name,

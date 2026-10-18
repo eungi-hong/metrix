@@ -26,29 +26,44 @@ class ChatRequest(BaseModel):
 
 
 class MovementSource(BaseModel):
-    """A movement that was injected into the prompt, with its citation label."""
+    """A movement the answer cites, with its citation label."""
 
-    ref: str = Field(description="Citation label used in the answer, e.g. 'M1'.")
+    ref: str = Field(description="Citation label used in the answer: M and the movement id, e.g. 'M412'.")
     movement_id: int
+    symbol: str | None = None
     date: date
     daily_return_pct: float
     direction: str
 
 
 class ArticleSource(BaseModel):
-    ref: str = Field(description="Citation label used in the answer, e.g. 'A3'.")
+    ref: str = Field(description="Citation label used in the answer: A and the article id, e.g. 'A1033'.")
     article_id: int
     title: str | None
     url: str
     source: str | None
     published_at: date | None
-    relevance_tier: str
-    relevance_score: float
+    relevance_tier: str | None = None
+    relevance_score: float | None = None
+
+
+class FilingSource(BaseModel):
+    ref: str = Field(description="Citation label used in the answer: F and the filing id, e.g. 'F7'.")
+    filing_id: int
+    symbol: str | None = None
+    accession: str
+    form: str
+    items: list[str] = Field(default_factory=list)
+    url: str | None = None
+    accepted_at: datetime | None = None
 
 
 class ChatSources(BaseModel):
+    """Only what the answer actually cites."""
+
     movements: list[MovementSource] = Field(default_factory=list)
     articles: list[ArticleSource] = Field(default_factory=list)
+    filings: list[FilingSource] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):
