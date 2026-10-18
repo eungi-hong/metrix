@@ -210,3 +210,34 @@ def session_window(day: date, before: int, after: int) -> tuple[datetime, dateti
 def _as_utc(value: datetime) -> datetime:
     """Naive datetimes (SQLite) are UTC by convention in this codebase."""
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+
+ReleaseTiming = Literal["before_open", "during_session", "after_close", "unknown"]
+
+
+def first_affected_session(at: datetime | None, day: date | None = None) -> tuple[date | None, ReleaseTiming]:
+    """The first session whose prices can reflect something released at `at`,
+    and when it came relative to that session: before its open, during it, or
+    after the previous session's close on an earlier New York day.
+
+    With no time (`at` None), `day` is used: that session if it is one,
+    otherwise the next, with timing "unknown". None outside the calendar.
+    """
+    cal = calendar()
+    if at is None:
+        if day is None:
+            return None, "unknown"
+        stamp = pd.Timestamp(day)
+        if stamp < cal.first_session or stamp > cal.last_session:
+            return None, "unknown"
+        session = stamp if cal.is_session(stamp) else cal.date_to_session(stamp, direction="next")
+        return session.date(), "unknown"
+    instant = pd.Timestamp(_as_utc(at))
+    if instant < cal.first_minute or instant >= cal.last_minute:
+        return None, "unknown"
+    if cal.is_open_on_minute(instant):
+        return cal.minute_to_session(instant).date(), "during_session"
+    next_open = cal.next_open(instant)
+    session = cal.minute_to_session(next_open).date()
+    local_day = _as_utc(at).astimezone(NEW_YORK).date()
+    return session, ("before_open" if local_day == session else "after_close")

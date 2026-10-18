@@ -1,0 +1,149 @@
+"""Response models for the research endpoints: symbol search, the movement
+case file, filings, earnings, and the market pulse."""
+
+from __future__ import annotations
+
+from datetime import date, datetime
+from typing import Literal
+
+from pydantic import BaseModel, Field
+
+from app.schemas.market import EvidenceState, MovementOut, TickerOut
+
+
+class SymbolMatchOut(BaseModel):
+    symbol: str
+    name: str | None = None
+    exchange: str | None = None
+    is_etf: bool | None = None
+    has_data: bool = Field(description="Metrix already holds researched data for it.")
+
+
+class SymbolSearchOut(BaseModel):
+    query: str
+    results: list[SymbolMatchOut]
+
+
+class ReferenceReturnOut(BaseModel):
+    """A peer's or benchmark's return over the same session."""
+
+    symbol: str | None
+    name: str | None = None
+    role: str = Field(description="competitor, supplier, customer, partner; or market, sector.")
+    daily_return: float | None = Field(
+        default=None, description="Close to close on the movement's session; null when no bars are stored."
+    )
+
+
+class RawTestOut(BaseModel):
+    daily_return: float
+    threshold: float = Field(description="max(floor, k * rolling sigma), as stored at detection.")
+    threshold_source: str
+    rolling_std: float | None
+    k: float
+    window: int
+    floor: float
+    passed: bool
+
+
+class AbnormalTestOut(BaseModel):
+    sar: float | None
+    abnormal_return: float | None
+    k: float = Field(description="MOVEMENT_ABNORMAL_K now (not stored per movement).")
+    floor_basis: Literal["return", "abnormal"]
+    floor: float
+    passed: bool | None = Field(description="Null when the movement could not be decomposed.")
+
+
+class DetectionAuditOut(BaseModel):
+    """Why the day was flagged: both tests, with their inputs."""
+
+    trigger: str = Field(description="raw, abnormal or both, as stored; raw for movements before v2.")
+    qualifies: bool
+    current_mode: Literal["raw", "abnormal", "union"]
+    raw: RawTestOut
+    abnormal: AbnormalTestOut
+
+
+class MovementCaseOut(BaseModel):
+    ticker: TickerOut
+    movement: MovementOut
+    detection: DetectionAuditOut
+    benchmarks: list[ReferenceReturnOut]
+    peers: list[ReferenceReturnOut] = Field(
+        description="The ticker's peer set and how each did that session (prices only, "
+        "refreshed nightly for the pre-warmed universe's peers)."
+    )
+    previous_date: date | None = Field(default=None, description="The ticker's previous movement.")
+    next_date: date | None = Field(default=None, description="The ticker's next movement.")
+
+
+class TickerFilingOut(BaseModel):
+    accession: str
+    form: str
+    items: list[str] = Field(default_factory=list)
+    events: list[str] = Field(default_factory=list)
+    filing_date: date
+    accepted_at: datetime | None = None
+    url: str | None = None
+    movement_dates: list[date] = Field(
+        default_factory=list, description="Movements whose news window this filing falls in."
+    )
+
+
+class TickerFilingsOut(BaseModel):
+    symbol: str
+    filings: list[TickerFilingOut]
+    note: str | None = None
+
+
+class EarningsMovementOut(BaseModel):
+    date: date
+    daily_return: float
+    abnormal_return: float | None = None
+    evidence: EvidenceState | None = None
+
+
+class EarningsEventOut(BaseModel):
+    """An earnings release, from an 8-K with Item 2.02."""
+
+    accession: str
+    accepted_at: datetime | None
+    filing_date: date
+    session: date | None = Field(description="The first session whose prices could reflect it.")
+    timing: Literal["before_open", "during_session", "after_close", "unknown"]
+    url: str | None = None
+    movement: EarningsMovementOut | None = Field(
+        default=None, description="The movement on that session, if the day was flagged."
+    )
+
+
+class EarningsOut(BaseModel):
+    symbol: str
+    source: str = "sec_8k_item_2.02"
+    events: list[EarningsEventOut]
+    note: str
+
+
+class PulseMoverOut(BaseModel):
+    symbol: str
+    company_name: str | None
+    date: date
+    daily_return: float
+    abnormal_return: float | None
+    sar: float | None
+    dominant: str | None
+    explanation: str = Field(description="The strongest linked evidence in one line, or why there is none.")
+    evidence: EvidenceState
+
+
+class SectorReturnOut(BaseModel):
+    sector: str
+    symbol: str
+    total_return: float | None = Field(description="Compounded over the sessions; null without bars.")
+
+
+class MarketPulseOut(BaseModel):
+    sessions: list[date] = Field(description="The sessions covered, latest last.")
+    movers: list[PulseMoverOut] = Field(description="Largest abnormal moves first.")
+    sectors: list[SectorReturnOut] = Field(description="Benchmarks' compounded return over the sessions.")
