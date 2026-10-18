@@ -1,173 +1,114 @@
-import type { ChatResponse, Job, TickerDetail } from "./types";
+/**
+ * The Metrix API client. Every request goes through `request`, which turns a
+ * non-2xx answer into an `ApiError` carrying the server's error code, the
+ * limit it hit, when to retry and the request id, so `describeError` can
+ * explain it in plain words.
+ */
+import type {
+  ChatRequest, ChatResponse, ConversationDetail, ConversationList, EarningsOut, Job, MarketPulse,
+  MovementCase, SymbolSearch, TickerDetail, TickerFilings, Watchlist, WatchlistDigest, WatchlistIn,
+} from "./types";
 
-export type ApiErrorKind =
-  | "credentials"
-  | "quota"
-  | "spend-cap"
-  | "upstream"
-  | "network"
-  | "request";
-
-export class ApiError extends Error {
-  constructor(
-    message: string,
-    readonly kind: ApiErrorKind,
-    readonly status?: number,
-    readonly retryAfter?: number,
-  ) {
-    super(message);
-    this.name = "ApiError";
-  }
-}
-
-export interface TickerResult {
-  data: TickerDetail;
-  status: number;
-}
+export const API_BASE_URL: string = (import.meta.env.VITE_METRIX_API_BASE_URL ?? "http://localhost:8000").replace(/\/$/, "");
 
 export interface ProviderKeys {
   exaApiKey: string;
   openaiApiKey: string;
 }
 
-export function normalizeTickerResponse(payload: TickerDetail): TickerDetail {
-  // The API intentionally nests evidence under its movement. Only normalise
-  // optional collections so rendering never has to invent missing data.
+let providerKeys: ProviderKeys | null = null;
+/** Bring-your-own keys, from Settings. Sent only as request headers. */
+export function setProviderKeys(keys: ProviderKeys | null) {
+  providerKeys = keys;
+}
+export function getProviderKeys(): ProviderKeys | null {
+  return providerKeys;
+}
+
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string | null,
+    readonly scope: string | null = null,
+    readonly retryAfterSeconds: number | null = null,
+    readonly resetSeconds: number | null = null,
+    readonly requestId: string | null = null,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+export function headers(extra?: HeadersInit): Record<string, string> {
   return {
-    ...payload,
-    prices: payload.prices ?? [],
-    movements: payload.movements.map((movement) => ({
-      ...movement,
-      news: movement.news ?? [],
-    })),
-    warnings: payload.warnings ?? [],
+    Accept: "application/json",
+    ...(providerKeys ? { "X-Exa-Api-Key": providerKeys.exaApiKey, "X-OpenAI-Api-Key": providerKeys.openaiApiKey } : {}),
+    ...(extra as Record<string, string> | undefined),
   };
 }
 
-function errorFromResponse(status: number, body: unknown, retryAfter: string | null) {
-  const record = typeof body === "object" && body !== null ? body as Record<string, unknown> : {};
-  const message = typeof record.detail === "string" ? record.detail : `Request failed (${status}).`;
-  const retry = retryAfter ? Number(retryAfter) : undefined;
-  const code = record.error;
-  const kind: ApiErrorKind = status === 401
-    ? "credentials"
-    : status === 429
-      ? "quota"
-      : status === 503 && code === "spend_cap_reached"
-        ? "spend-cap"
-        : status >= 500
-          ? "upstream"
-          : "request";
-  return new ApiError(message, kind, status, Number.isFinite(retry) ? retry : undefined);
+export async function errorFrom(response: Response): Promise<ApiError> {
+  const body: unknown = await response.json().catch(() => null);
+  const record = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+  const number = (name: string) => {
+    const value = Number(response.headers.get(name));
+    return response.headers.get(name) != null && Number.isFinite(value) ? value : null;
+  };
+  return new ApiError(
+    typeof record.detail === "string" ? record.detail : `Request failed (${response.status}).`,
+    response.status,
+    typeof record.error === "string" ? record.error : null,
+    response.headers.get("X-RateLimit-Scope"),
+    number("Retry-After"),
+    number("X-RateLimit-Reset"),
+    response.headers.get("X-Request-ID"),
+  );
 }
 
-/** One server-sent event from GET /events. */
-export interface StreamEvent {
-  type: "job" | "ticker_updated";
-  data: Record<string, unknown>;
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, { ...init, headers: headers(init?.headers) });
+  } catch {
+    throw new ApiError("network", 0, "network");
+  }
+  if (!response.ok) throw await errorFrom(response);
+  if (response.status === 204) return undefined as T;
+  return (await response.json()) as T;
 }
 
-/**
- * Split a text/event-stream buffer into complete events and the unfinished tail.
- * Comment lines (heartbeats) and `retry:` hints carry no event and are dropped.
- */
-export function parseEventStream(buffer: string): { events: StreamEvent[]; rest: string } {
-  const normalized = buffer.replace(/\r\n?/g, "\n");
-  const blocks = normalized.split("\n\n");
-  const rest = blocks.pop() ?? "";
-  const events: StreamEvent[] = [];
-  for (const block of blocks) {
-    let type = "message";
-    const data: string[] = [];
-    for (const line of block.split("\n")) {
-      if (line.startsWith("event:")) type = line.slice(6).trim();
-      else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
-    }
-    if ((type === "job" || type === "ticker_updated") && data.length) {
-      try { events.push({ type, data: JSON.parse(data.join("\n")) as Record<string, unknown> }); } catch { /* a malformed event is skipped */ }
-    }
+type Params = Record<string, string | number | boolean | null | undefined | (string | number)[]>;
+
+export function query(params: Params): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value == null || value === "" || value === false) continue;
+    for (const item of Array.isArray(value) ? value : [value]) search.append(key, String(item));
   }
-  return { events, rest };
+  const text = search.toString();
+  return text ? `?${text}` : "";
 }
 
-export class MetrixApiClient {
-  constructor(
-    private readonly baseUrl: string,
-    private readonly providerKeys?: ProviderKeys,
-  ) {}
+const json = (body: unknown): RequestInit => ({ body: JSON.stringify(body), headers: { "Content-Type": "application/json" } });
 
-  private async request<T>(path: string, init?: RequestInit): Promise<{ data: T; status: number }> {
-    let response: Response;
-    try {
-      response = await fetch(`${this.baseUrl.replace(/\/$/, "")}${path}`, {
-        ...init,
-        headers: {
-          Accept: "application/json",
-          ...(this.providerKeys ? {
-            "X-Exa-Api-Key": this.providerKeys.exaApiKey,
-            "X-OpenAI-Api-Key": this.providerKeys.openaiApiKey,
-          } : {}),
-          ...init?.headers,
-        },
-      });
-    } catch {
-      throw new ApiError("Metrix could not reach the local service. Check that the API is running.", "network");
-    }
-
-    const body: unknown = await response.json().catch(() => null);
-    if (!response.ok) throw errorFromResponse(response.status, body, response.headers.get("Retry-After"));
-    return { data: body as T, status: response.status };
-  }
-
-  async getTicker(symbol: string, options: { refresh?: boolean; wait?: boolean } = {}): Promise<TickerResult> {
-    const params = new URLSearchParams({ include_prices: "true", limit: "50" });
-    if (options.refresh) params.set("refresh", "true");
-    if (options.wait) params.set("wait", "true");
-    // no-cache: revalidate with the ETag every time (a 304 is cheap) rather
-    // than reuse a copy the browser still considers fresh after an update.
-    const result = await this.request<TickerDetail>(`/tickers/${encodeURIComponent(symbol)}?${params}`, { cache: "no-cache" });
-    return { data: normalizeTickerResponse(result.data), status: result.status };
-  }
-
-  /**
-   * Follow GET /events for one ticker until the server ends the stream (after a
-   * few minutes) or `signal` aborts. Read with fetch rather than EventSource so
-   * headers can be sent. Rejects if the stream cannot be opened.
-   */
-  async streamEvents(symbol: string, onEvent: (event: StreamEvent) => void, signal?: AbortSignal): Promise<void> {
-    const response = await fetch(`${this.baseUrl.replace(/\/$/, "")}/events?symbol=${encodeURIComponent(symbol)}`, {
-      headers: { Accept: "text/event-stream" },
-      signal,
-    });
-    if (!response.ok || !response.body) {
-      throw errorFromResponse(response.status, await response.json().catch(() => null), response.headers.get("Retry-After"));
-    }
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) return;
-      buffer += decoder.decode(value, { stream: true });
-      const parsed = parseEventStream(buffer);
-      buffer = parsed.rest;
-      parsed.events.forEach(onEvent);
-    }
-  }
-
-  async getJob(jobId: number): Promise<Job> {
-    return (await this.request<Job>(`/jobs/${jobId}`)).data;
-  }
-
-  async sendChat(input: { ticker?: string; question: string; conversationId?: string }): Promise<ChatResponse> {
-    return (await this.request<ChatResponse>("/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ticker: input.ticker,
-        question: input.question,
-        conversation_id: input.conversationId,
-      }),
-    })).data;
-  }
-}
+export const api = {
+  /** cache: no-cache revalidates with the ETag (a cheap 304) instead of trusting a stale copy. */
+  ticker: (symbol: string, params: Params = {}) =>
+    request<TickerDetail>(`/tickers/${encodeURIComponent(symbol)}${query({ include_prices: true, include_benchmarks: true, limit: 200, ...params })}`, { cache: "no-cache" }),
+  movementCase: (symbol: string, day: string) =>
+    request<MovementCase>(`/tickers/${encodeURIComponent(symbol)}/movements/${day}`, { cache: "no-cache" }),
+  filings: (symbol: string) => request<TickerFilings>(`/tickers/${encodeURIComponent(symbol)}/filings`),
+  earnings: (symbol: string) => request<EarningsOut>(`/tickers/${encodeURIComponent(symbol)}/earnings`),
+  pulse: (sessions = 1, limit = 10) => request<MarketPulse>(`/market/pulse${query({ sessions, limit })}`),
+  searchSymbols: (q: string, signal?: AbortSignal) => request<SymbolSearch>(`/symbols/search${query({ q, limit: 8 })}`, { signal }),
+  job: (id: number) => request<Job>(`/jobs/${id}`),
+  chat: (body: ChatRequest) => request<ChatResponse>("/chat", { method: "POST", ...json(body) }),
+  conversations: () => request<ConversationList>(`/conversations${query({ limit: 30 })}`),
+  conversation: (id: string) => request<ConversationDetail>(`/conversations/${encodeURIComponent(id)}`),
+  watchlists: () => request<Watchlist[]>("/watchlists"),
+  createWatchlist: (body: WatchlistIn) => request<Watchlist>("/watchlists", { method: "POST", ...json(body) }),
+  replaceWatchlist: (id: number, body: WatchlistIn) => request<Watchlist>(`/watchlists/${id}`, { method: "PUT", ...json(body) }),
+  deleteWatchlist: (id: number) => request<void>(`/watchlists/${id}`, { method: "DELETE" }),
+  digest: (id: number, sessions: number) => request<WatchlistDigest>(`/watchlists/${id}/digest${query({ sessions })}`),
+};
