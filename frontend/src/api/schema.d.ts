@@ -1350,6 +1350,8 @@ export interface components {
              * @description The ticker's previous movement.
              */
             previous_date?: string | null;
+            /** @description Null outside the exchange calendar. */
+            session?: components["schemas"]["SessionFrameOut"] | null;
             ticker: components["schemas"]["TickerOut"];
         };
         /**
@@ -1763,6 +1765,38 @@ export interface components {
              * @description Compounded over the sessions; null without bars.
              */
             total_return: number | null;
+        };
+        /**
+         * SessionFrameOut
+         * @description The session's boundaries on the New York Stock Exchange calendar (early
+         *     closes and holidays included), for placing evidence on a timeline.
+         */
+        SessionFrameOut: {
+            /**
+             * Close
+             * Format: date-time
+             */
+            close: string;
+            /**
+             * Next Open
+             * Format: date-time
+             */
+            next_open: string;
+            /**
+             * Open
+             * Format: date-time
+             */
+            open: string;
+            /**
+             * Previous
+             * Format: date
+             */
+            previous: string;
+            /**
+             * Prior Close
+             * Format: date-time
+             */
+            prior_close: string;
         };
         /** SpendByOperation */
         SpendByOperation: {

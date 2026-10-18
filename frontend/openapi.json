@@ -2214,6 +2214,17 @@
             "description": "The ticker's previous movement.",
             "title": "Previous Date"
           },
+          "session": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionFrameOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null outside the exchange calendar."
+          },
           "ticker": {
             "$ref": "#/components/schemas/TickerOut"
           }
@@ -3220,6 +3231,45 @@
           "total_return"
         ],
         "title": "SectorReturnOut",
+        "type": "object"
+      },
+      "SessionFrameOut": {
+        "description": "The session's boundaries on the New York Stock Exchange calendar (early\ncloses and holidays included), for placing evidence on a timeline.",
+        "properties": {
+          "close": {
+            "format": "date-time",
+            "title": "Close",
+            "type": "string"
+          },
+          "next_open": {
+            "format": "date-time",
+            "title": "Next Open",
+            "type": "string"
+          },
+          "open": {
+            "format": "date-time",
+            "title": "Open",
+            "type": "string"
+          },
+          "previous": {
+            "format": "date",
+            "title": "Previous",
+            "type": "string"
+          },
+          "prior_close": {
+            "format": "date-time",
+            "title": "Prior Close",
+            "type": "string"
+          }
+        },
+        "required": [
+          "previous",
+          "prior_close",
+          "open",
+          "close",
+          "next_open"
+        ],
+        "title": "SessionFrameOut",
         "type": "object"
       },
       "SpendByOperation": {

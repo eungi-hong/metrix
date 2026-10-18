@@ -42,6 +42,7 @@ from app.schemas.research import (
     PulseMoverOut,
     RawTestOut,
     ReferenceReturnOut,
+    SessionFrameOut,
     SectorReturnOut,
     SymbolMatchOut,
     SymbolSearchOut,
@@ -216,8 +217,13 @@ async def movement_case(symbol: str, day: date, request: Request, session: Sessi
     if movement.sar is not None:
         floored = movement.abnormal_return if floor_basis == "abnormal" else movement.daily_return
         abnormal_passed = abs(movement.sar) >= settings.movement_abnormal_k and abs(floored or 0.0) >= movement.detector_floor
+    frame = sessions.frame_for(day)
     case = MovementCaseOut(
         ticker=TickerOut.model_validate(ticker),
+        session=SessionFrameOut(
+            previous=frame.previous, prior_close=frame.prior_close, open=frame.open,
+            close=frame.close, next_open=frame.next_open,
+        ) if frame else None,
         movement=_movement_out(movement, None, jobs, now),
         detection=DetectionAuditOut(
             trigger=movement.trigger or "raw",

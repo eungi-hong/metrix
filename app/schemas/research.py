@@ -65,8 +65,20 @@ class DetectionAuditOut(BaseModel):
     abnormal: AbnormalTestOut
 
 
+class SessionFrameOut(BaseModel):
+    """The session's boundaries on the New York Stock Exchange calendar (early
+    closes and holidays included), for placing evidence on a timeline."""
+
+    previous: date
+    prior_close: datetime
+    open: datetime
+    close: datetime
+    next_open: datetime
+
+
 class MovementCaseOut(BaseModel):
     ticker: TickerOut
+    session: SessionFrameOut | None = Field(default=None, description="Null outside the exchange calendar.")
     movement: MovementOut
     detection: DetectionAuditOut
     benchmarks: list[ReferenceReturnOut]

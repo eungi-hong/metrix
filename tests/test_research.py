@@ -94,6 +94,9 @@ async def test_the_case_file_has_everything_about_one_move(client, ready, sessio
     case = response.json()
 
     assert case["movement"]["date"] == company_day.isoformat()
+    frame = sessions.frame_for(company_day)
+    assert case["session"]["open"].startswith(frame.open.strftime("%Y-%m-%dT%H:%M"))
+    assert case["session"]["previous"] == frame.previous.isoformat()
     assert case["movement"]["evidence"]["state"] == "explained"
     assert case["movement"]["decomposition"]["dominant"] == "company"
     audit = case["detection"]
