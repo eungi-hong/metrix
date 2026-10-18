@@ -65,7 +65,25 @@ None: there is no labelled set yet.
 None measured yet. Known, from the code: the v1 prompt labels timing in calendar days
 relative to the move's date in UTC, so an article published at 20:30 New York time the
 evening before reads as the same day; and it tells the model that after-close articles
-(T+0 or T+1) can explain the move. Phase 3's scorer v2 uses the session buckets.
+(T+0 or T+1) can explain the move. Scorer v2 uses the session buckets instead, and
+never links a candidate published after the next session's open (timing violations
+are zero by construction for candidates with a known time).
+
+## Comparing scorer v1 and v2
+
+`--scorer v1|v2` (default `RELEVANCE_SCORER_VERSION`) picks the scorer; both run on the
+same snapshots. v2 also sees the snapshot's decomposition, session legs and filings
+(as candidates, so a label may accept a filing by its accession number), and may
+abstain, which the abstention metrics score against `no_clear_driver` labels.
+
+```bash
+python -m evals.run --live --budget-usd 2 --scorer v1 --name scorer-v1
+python -m evals.run --live --budget-usd 2 --scorer v2 --name scorer-v2
+```
+
+v2 becomes the default only if it beats v1 on Hit@1 and Recall@5 with overlapping or
+better intervals and no rise in timing violations. Until then it is opt-in. Neither has
+been run on real data yet.
 
 ## How to build the set and reproduce
 

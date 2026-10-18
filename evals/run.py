@@ -3,10 +3,12 @@
     python -m evals.run --replay                      # no network, no key
     python -m evals.run --replay --gate               # also fail on a regression (CI)
     python -m evals.run --live --budget-usd 2         # re-score for real, recorded
+    python -m evals.run --replay --scorer v2          # scorer v2 on the same set
 
-Each labelled movement is scored exactly as ingestion scores it
-(`relevance.build_scoring_request` and `apply_scoring_result`) on its frozen
-candidates. `--replay` answers from `evals/recordings/`; a prompt with no
+Each labelled movement is scored exactly as ingestion scores it on its
+frozen candidates: `relevance.build_scoring_request` and `apply_scoring_result`
+for scorer v1, and their `relevance_v2` counterparts for v2, which also see the
+snapshot's decomposition, session legs and filings (as candidates). `--replay` answers from `evals/recordings/`; a prompt with no
 recording fails the run. `--live` calls the configured provider through the
 normal seam, so every call is rate limited and recorded in the spend ledger
 (as operation `eval_relevance`), and stops before a call that would take the
@@ -32,6 +34,7 @@ from app.services.llm import LLMProvider
 from app.services.news.base import NewsCandidate
 from app.services.news.queries import MovementContext
 from app.services.peers import PeerSet
+from app.services import relevance_v2
 from app.services.relevance import apply_scoring_result, build_scoring_request
 from evals import metrics
 from evals.metrics import CaseResult, RankedLink
@@ -51,7 +54,7 @@ from evals.schema import (
 )
 
 OPERATION = "eval_relevance"
-SCORER_VERSION = "v1"
+SCORERS = ("v1", "v2")
 # Headline metrics the gate watches, and how far each may fall below the
 # baseline before CI fails. Small n makes these noisy; the tolerance is wide.
 GATED = ("hit_at_1", "recall_at_5", "tier_accuracy")
@@ -88,9 +91,45 @@ def candidates_for(snapshot: Snapshot) -> list[tuple[str, NewsCandidate]]:
     ]
 
 
-async def score_case(snapshot: Snapshot, label: Label, llm: LLMProvider) -> CaseResult:
-    request = build_scoring_request(context_for(snapshot), candidates_for(snapshot), PeerSet.model_validate(snapshot.peers or {"peers": [], "industry_themes": []}))
+def filing_candidates_for(snapshot: Snapshot) -> list[tuple[str, NewsCandidate]]:
+    """The snapshot's filings as scorer v2 candidates, described the way
+    ingestion describes them."""
+    out = []
+    for f in snapshot.filings:
+        events = [f"Item {item} {event}" for item, event in zip(f.items, f.events)] if len(f.items) == len(f.events) else f.events
+        description = f.form + (f": {'; '.join(events)}" if events else "")
+        out.append(
+            (
+                "filing",
+                NewsCandidate(
+                    url=f.url or f"https://www.sec.gov/edgar/{f.accession}", title=f"SEC filing {description}",
+                    published_at=f.accepted_at, summary=f"{description}. Accession {f.accession}.",
+                    source_domain="sec.gov", provider="snapshot", source_type="filing", accession=f.accession,
+                ),
+            )
+        )
+    return out
+
+
+def facts_for(snapshot: Snapshot) -> relevance_v2.MovementFacts:
+    d, legs = snapshot.decomposition or {}, snapshot.legs or {}
+    return relevance_v2.MovementFacts(
+        market=d.get("market"), sector=d.get("sector"), company=d.get("abnormal"),
+        gap=legs.get("gap"), intraday=legs.get("intraday"),
+    )
+
+
+async def score_case(snapshot: Snapshot, label: Label, llm: LLMProvider, *, scorer: str = "v1") -> CaseResult:
+    peers = PeerSet.model_validate(snapshot.peers or {"peers": [], "industry_themes": []})
+    if scorer == "v2":
+        request = relevance_v2.build_scoring_request_v2(
+            context_for(snapshot), candidates_for(snapshot) + filing_candidates_for(snapshot), peers,
+            facts=facts_for(snapshot),
+        )
+    else:
+        request = build_scoring_request(context_for(snapshot), candidates_for(snapshot), peers)
     timing = {c.id: c.timing for c in snapshot.candidates}
+    timing.update({f.accession: f.timing for f in snapshot.filings})
     if request is None:
         return CaseResult(label=label, ranked=[], notes=["no candidates"])
     started = time.perf_counter()
@@ -99,18 +138,25 @@ async def score_case(snapshot: Snapshot, label: Label, llm: LLMProvider) -> Case
         operation=OPERATION, max_tokens=request.max_tokens,
     )
     latency = time.perf_counter() - started
-    scored = apply_scoring_result(request, report, scored_by=llm.model)
-    ranked = [
-        RankedLink(
-            candidate_id=candidate_id(item.candidate.url),
-            url=item.candidate.url,
-            tier=item.tier.value,
-            score=item.score,
-            timing=timing.get(candidate_id(item.candidate.url)),
+    notes: list[str] = []
+    if scorer == "v2":
+        outcome = relevance_v2.apply_scoring_result_v2(request, report, scored_by=llm.model)
+        scored = outcome.scored
+        if outcome.abstained and outcome.abstain_reason:
+            notes.append(f"abstained: {outcome.abstain_reason}")
+    else:
+        scored = apply_scoring_result(request, report, scored_by=llm.model)
+    ranked = []
+    for item in scored:
+        accession = item.candidate.accession
+        key = accession or candidate_id(item.candidate.url)
+        ranked.append(
+            RankedLink(
+                candidate_id=key, url=item.candidate.url, tier=item.tier.value, score=item.score,
+                timing=timing.get(key), accession=accession,
+            )
         )
-        for item in scored
-    ]
-    return CaseResult(label=label, ranked=ranked, latency_s=latency)
+    return CaseResult(label=label, ranked=ranked, latency_s=latency, notes=notes)
 
 
 async def _ledger_spend_since(start: datetime) -> Decimal:
@@ -134,6 +180,7 @@ async def evaluate(
     llm: LLMProvider,
     *,
     budget_usd: Decimal | None = None,
+    scorer: str = "v1",
 ) -> tuple[list[CaseResult], list[str]]:
     cases, skipped = [], []
     started = datetime.now(timezone.utc)
@@ -146,7 +193,7 @@ async def evaluate(
             spent = await _ledger_spend_since(started)
             if spent >= budget_usd:
                 raise BudgetExceeded(f"spent {spent} of {budget_usd} USD; stopping before {label.key}")
-        cases.append(await score_case(snapshot, label, llm))
+        cases.append(await score_case(snapshot, label, llm, scorer=scorer))
     return cases, skipped
 
 
@@ -180,7 +227,8 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--live", action="store_true")
     parser.add_argument("--budget-usd", type=Decimal, help="required with --live")
     parser.add_argument("--gate", action="store_true", help="exit 1 on a regression against evals/baseline.json")
-    parser.add_argument("--name", default=f"scorer-{SCORER_VERSION}")
+    parser.add_argument("--scorer", choices=SCORERS, default=settings.relevance_scorer_version)
+    parser.add_argument("--name", help="results file name (default scorer-<version>)")
     parser.add_argument("--model", help="model whose recordings to replay (default LLM_MODEL)")
     parser.add_argument("--labels", type=Path, default=GOLDEN_PATH)
     parser.add_argument("--snapshots", type=Path, default=SNAPSHOTS_DIR)
@@ -189,6 +237,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.live and args.budget_usd is None:
         parser.error("--live needs --budget-usd")
+    args.name = args.name or f"scorer-{args.scorer}"
 
     labels = load_labels(args.labels)
     headline = [label for label in labels if label.label_source in HEADLINE_SOURCES]
@@ -197,11 +246,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     llm = build_llm(args)
-    cases, skipped = asyncio.run(evaluate(headline, load_snapshots(args.snapshots), llm, budget_usd=args.budget_usd))
+    cases, skipped = asyncio.run(evaluate(headline, load_snapshots(args.snapshots), llm, budget_usd=args.budget_usd, scorer=args.scorer))
     summary = metrics.summarise(cases, min_score=settings.relevance_min_score)
     document = {
         "name": args.name,
-        "scorer": SCORER_VERSION,
+        "scorer": args.scorer,
         "model": llm.model,
         "mode": "live" if args.live else "replay",
         "run_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),

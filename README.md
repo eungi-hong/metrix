@@ -710,6 +710,27 @@ in code at both points — on provider output, and against the stored article be
 link is written — rather than trusted to the provider or the model. Both paths have
 regression tests.
 
+### SEC filings and scorer v2 (opt-in)
+
+With `SEC_EDGAR_ENABLED=true` and a contact in `SEC_USER_AGENT`, each enrichment also
+reads the company's EDGAR filing list (cached, rate limited, SEC hosts only) and
+attaches the filings accepted in the movement's news window, with their session
+timing. They are returned as `filings` on each movement: form, 8-K items as events,
+acceptance time, link. EDGAR is best effort and never fails an enrichment.
+
+`RELEVANCE_SCORER_VERSION=v2` switches to a second scorer, still one call per
+movement. It is shown what v1 is not: the decomposition ("about 80% company-specific"),
+which session leg carried the move, each candidate's session bucket instead of a
+calendar offset, the filings as candidates, and a source-quality hint (primary,
+tier-1 newsroom, other; configurable domain lists). It returns a `role` per link
+(`primary`, `contributing`, `context`) and may abstain on a movement
+(`evidence_abstained`, `abstain_reason`) when nothing explains it. One rule is code,
+not prompt: a candidate published after the next session opened is never linked.
+Every link records its `scorer_version`.
+
+v1 stays the default until the evaluation (`python -m evals.run --scorer v2`) shows v2
+is better on the labelled set; see [docs/EVALUATION.md](docs/EVALUATION.md).
+
 ---
 
 ## Architecture
@@ -929,4 +950,9 @@ TEST_REDIS_URL=redis://localhost:6380/15 pytest
 - **Relevance is unevaluated so far.** The evaluation harness exists (snapshots,
   labels, metrics with bootstrap intervals, replay, a CI gate), but the labelled set is
   still empty, so "the scoring is good" is not yet a measurement. See
-  [docs/EVALUATION.md](docs/EVALUATION.md).
+  [docs/EVALUATION.md](docs/EVALUATION.md). Scorer v2 and SEC filings are built and
+  tested offline but off by default, for the same reason.
+- **Filing acceptance times are read as New York time**, which is unverified against a
+  live filing (sec.gov was not reachable where it was built). One setting changes it.
+- **No earnings calendar and no press-release text extraction yet.** Filings carry
+  their 8-K items, not their exhibit text.

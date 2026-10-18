@@ -3,6 +3,24 @@
 One entry per phase, newest first. Each phase ships on its own branch
 (`v2/<phase>-<slug>`) and pull request.
 
+## Phase 3: primary sources and scorer v2 (`v2/3-primary-sources`)
+
+Additive and opt-in: no default changes what is stored or spent.
+
+- Filings stored once (`filings`, unique on accession) and attached to movements in
+  their news window with session timing (`movement_filings`); `tickers.cik`.
+  `app/services/filings.py`, best effort, behind `SEC_EDGAR_ENABLED`.
+- Scorer v2 (`app/services/relevance_v2.py`, `RELEVANCE_SCORER_VERSION=v2`): the
+  decomposition, session legs, session buckets, filings as candidates, source quality;
+  a `role` per link and movement-level abstention. Links after the next open are never
+  kept. Links and filing verdicts record `scorer_version`; stale filing verdicts are
+  superseded like links.
+- API: `filings`, `evidence_abstained`, `abstain_reason` on movements; `role` and
+  `scorer_version` on links.
+- `evals.run --scorer v1|v2`.
+- Migration `d2e6f3b8a1c4`.
+- Deferred (P1): the earnings calendar (3b) and press-release text extraction (3c).
+
 ## Phase 2: evaluation harness (`v2/2-eval-harness`)
 
 - `app/services/edgar.py`: SEC EDGAR ticker-to-CIK and filings, fair access (User-Agent,

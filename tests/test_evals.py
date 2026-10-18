@@ -268,3 +268,43 @@ def test_coverage_counts_what_is_labelled_against_the_targets():
     report = composition({snap.key: snap}, [label(accepted=["x"])])
     assert report["labelled"] == 1 and report["earnings_days"] == 1
     assert report["movements_short_of_target"] == 59 and report["queued_for_labelling"] == 0
+
+
+async def test_scorer_v2_sees_the_filings_and_a_label_can_accept_one_by_accession(tmp_path):
+    from app.services.relevance_v2 import AssessmentV2, RelevanceReportV2
+
+    class FilingFirst:
+        model = "stub-v2"
+        available = True
+        users: list[str] = []
+
+        async def parse_structured(self, *, system, user, output_model, **kw):
+            assert output_model is RelevanceReportV2
+            self.users.append(user)
+            count = user.count("] title:")
+            return RelevanceReportV2(
+                assessments=[
+                    AssessmentV2(index=i, tier="easy", score=0.95 if "SEC filing" in user.split(f"[{i}] title:")[1].split("\n")[0] else 0.4,
+                                 role="primary", rationale="r")
+                    for i in range(count)
+                ],
+                abstain=False,
+            )
+
+    filing = SnapshotFiling(accession="0001045810-25-000001", form="8-K", items=["2.02"],
+                            events=["results of operations (earnings)"], timing="overnight",
+                            accepted_at=datetime(2025, 5, 21, 20, 20, tzinfo=timezone.utc))
+    snap = snapshot_with(["first"], filings=[filing])
+    snap.decomposition = {"market": -0.01, "sector": -0.01, "abnormal": -0.04}
+    snap.legs = {"gap": -0.05, "intraday": -0.01}
+    gold = label(accepted=[filing.accession])
+    inner = FilingFirst()
+    recorder = RecordingLLM(tmp_path, mode="record", model="stub-v2", inner=inner)
+
+    v2, _ = await run.evaluate([gold], {snap.key: snap}, recorder, scorer="v2")
+
+    assert v2[0].hit_at_1 and v2[0].ranked[0].accession == filing.accession
+    assert v2[0].ranked[0].timing == "overnight"
+    assert "Item 2.02 results of operations (earnings)" in inner.users[0] and "Decomposition: about" in inner.users[0]
+    replayed, _ = await run.evaluate([gold], {snap.key: snap}, RecordingLLM(tmp_path, mode="replay", model="stub-v2"), scorer="v2")
+    assert replayed[0].hit_at_1
