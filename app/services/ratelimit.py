@@ -72,7 +72,7 @@ logger = get_logger(__name__)
 SECONDS_PER_MINUTE = 60.0
 TOKEN_EPSILON = 1e-9
 KEY_PREFIX = "metrix:ratelimit:"
-PROVIDERS = ("exa", "openai", "anthropic", "yfinance")
+PROVIDERS = ("exa", "openai", "anthropic", "yfinance", "sec")
 
 
 def provider_rate(provider: str) -> float:
@@ -82,6 +82,7 @@ def provider_rate(provider: str) -> float:
         "openai": settings.openai_max_rpm / SECONDS_PER_MINUTE,
         "anthropic": settings.anthropic_max_rpm / SECONDS_PER_MINUTE,
         "yfinance": settings.yfinance_max_rps,
+        "sec": settings.sec_max_rps,
     }
     return rates[provider]
 

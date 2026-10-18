@@ -175,7 +175,7 @@ def fresh_rate_limits(monkeypatch: pytest.MonkeyPatch) -> None:
     test's event loop; unthrottled because no test but the rate-limit tests
     should spend time waiting for tokens.
     """
-    for name in ("exa_max_rps", "anthropic_max_rpm", "yfinance_max_rps"):
+    for name in ("exa_max_rps", "anthropic_max_rpm", "yfinance_max_rps", "sec_max_rps"):
         monkeypatch.setattr(settings, name, 1e9)
     ratelimit.reset()
 

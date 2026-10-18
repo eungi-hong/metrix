@@ -700,6 +700,44 @@ class Settings(BaseSettings):
         description="Sessions after the move covered, through their after-hours.",
     )
 
+    # ------------------------------------------------------------ SEC EDGAR
+    sec_edgar_enabled: bool = Field(
+        default=False,
+        description="Fetch filings from SEC EDGAR. Requires SEC_USER_AGENT.",
+    )
+    sec_user_agent: str | None = Field(
+        default=None,
+        description="SEC fair access: a name and contact email, e.g. 'Metrix research "
+        "demo you@example.com'. Required whenever EDGAR is enabled.",
+    )
+    sec_max_rps: float = Field(
+        default=5.0,
+        gt=0,
+        le=10,
+        description="EDGAR requests per second across every process; the SEC allows 10.",
+    )
+    sec_acceptance_timezone: str = Field(
+        default="America/New_York",
+        description="Time zone EDGAR's acceptanceDateTime is read in. It carries a "
+        "trailing Z but appears to be New York wall time (an after-close earnings "
+        "8-K reads 16:20). UNVERIFIED in this repository until checked against a "
+        "real filing: see docs/EVALUATION.md.",
+    )
+    sec_http_timeout_seconds: float = Field(default=20.0, gt=0, description="Per-request timeout.")
+    sec_max_response_bytes: int = Field(
+        default=20_000_000,
+        gt=0,
+        description="Larger EDGAR responses are refused rather than read.",
+    )
+    sec_submissions_ttl_hours: int = Field(
+        default=12,
+        ge=1,
+        description="How long a company's filing list is cached; new filings appear in it.",
+    )
+    sec_company_tickers_ttl_days: int = Field(
+        default=7, ge=1, description="How long the ticker-to-CIK map is cached."
+    )
+
     # ------------------------------------------------------------------ chat
     chat_max_movements_in_context: int = Field(default=12, ge=1)
     chat_max_articles_per_movement: int = Field(default=4, ge=1)
@@ -815,6 +853,19 @@ class Settings(BaseSettings):
         ):
             raise ValueError(f"{name} must be a JSON object of string to symbol")
         return {key: value.strip().upper() for key, value in raw.items()}
+
+    @model_validator(mode="after")
+    def _check_sec_settings(self) -> "Settings":
+        if self.sec_edgar_enabled and not (self.sec_user_agent or "").strip():
+            raise ValueError(
+                "SEC_USER_AGENT is required when SEC_EDGAR_ENABLED is true: the SEC asks "
+                "every client to name itself and give a contact."
+            )
+        try:
+            ZoneInfo(self.sec_acceptance_timezone)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"SEC_ACCEPTANCE_TIMEZONE '{self.sec_acceptance_timezone}' is unknown") from exc
+        return self
 
     @model_validator(mode="after")
     def _check_decomposition_window(self) -> "Settings":
