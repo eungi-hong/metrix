@@ -44,6 +44,36 @@ class PlanLimits(BaseModel):
 
 # Starting points, meant to be tuned. Anonymous callers (AUTH_REQUIRED=false)
 # get the least, and cannot force refreshes or run work inline.
+# PROVISIONAL. The yfinance `sector` and `industry` strings a ticker's
+# benchmark is chosen by, mapped to SPDR Select Sector ETFs (and a few
+# industry ETFs). These keys are the strings the v2 brief lists; they have not
+# yet been checked against real yfinance responses. tests/test_benchmarks.py
+# fails loudly on any real profile string in tests/fixtures/
+# yfinance_profiles.json that has no entry here, so verifying them is a matter
+# of dropping that file in. Override with BENCHMARK_SECTOR_MAP_JSON and
+# BENCHMARK_INDUSTRY_MAP_JSON (for example an equal-weight sector ETF, to
+# avoid a large constituent leaking into its own sector factor).
+PROVISIONAL_SECTOR_BENCHMARKS: dict[str, str] = {
+    "Technology": "XLK",
+    "Healthcare": "XLV",
+    "Financial Services": "XLF",
+    "Consumer Cyclical": "XLY",
+    "Consumer Defensive": "XLP",
+    "Communication Services": "XLC",
+    "Industrials": "XLI",
+    "Energy": "XLE",
+    "Utilities": "XLU",
+    "Real Estate": "XLRE",
+    "Basic Materials": "XLB",
+}
+PROVISIONAL_INDUSTRY_BENCHMARKS: dict[str, str] = {
+    "Semiconductors": "SMH",
+    "Biotechnology": "XBI",
+    "Banks - Regional": "KRE",
+    "Residential Construction": "ITB",
+}
+
+
 DEFAULT_PLAN_LIMITS: dict[str, PlanLimits] = {
     "anonymous": PlanLimits(
         requests_per_minute=30, chat_per_minute=2, chat_per_day=10,
@@ -123,7 +153,18 @@ class Settings(BaseSettings):
 
     # -------------------------------------------------------------- ingestion
     price_history_days: int = Field(
-        default=365, ge=30, description="Default trailing window of prices to pull."
+        default=365,
+        ge=30,
+        description="Calendar days of the display window: movements are flagged, "
+        "and so enriched, only inside it. Prices are fetched further back, by "
+        "PRICE_ESTIMATION_EXTRA_DAYS, for the decomposition's estimation window.",
+    )
+    price_estimation_extra_days: int = Field(
+        default=200,
+        ge=0,
+        description="Calendar days of prices fetched before the display window, "
+        "so the earliest displayed movement has a full estimation window. Never "
+        "flagged or enriched.",
     )
     price_batch_size: int = Field(
         default=100,
@@ -559,6 +600,106 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ------------------------------------------- detection modes (README)
+    movement_detection_mode: Literal["raw", "abnormal", "union"] = Field(
+        default="raw",
+        description="raw: |r| >= max(floor, k * sigma) on the stock alone. "
+        "abnormal: |SAR| >= MOVEMENT_ABNORMAL_K and |r| >= the floor. union: "
+        "either. Union adds movements, and every new movement is enrichment "
+        "spend: measure it with scripts/measure_detection.py before switching.",
+    )
+    movement_abnormal_k: float = Field(
+        default=2.5,
+        gt=0,
+        description="Standardised abnormal return a day must reach to be flagged "
+        "in abnormal or union mode. A heuristic size, not a p-value.",
+    )
+    movement_abnormal_floor_basis: Literal["return", "abnormal"] = Field(
+        default="return",
+        description="What MOVEMENT_FLOOR_PCT applies to in the abnormal test: the "
+        "day's return (as the v2 brief specifies), or its abnormal return. Only "
+        "'abnormal' can flag a stock that was flat on a day its sector fell 4%.",
+    )
+
+    # --------------------------------------------- return decomposition
+    decomposition_estimation_sessions: int = Field(
+        default=120,
+        ge=10,
+        description="Sessions in the estimation window, which ends the session "
+        "before the move.",
+    )
+    decomposition_min_sessions: int = Field(
+        default=60,
+        ge=10,
+        description="Fewer sessions than this before a move and it is not "
+        "decomposed (raw detection, with a warning on the movement).",
+    )
+    decomposition_winsor_z: float = Field(
+        default=5.0,
+        ge=0,
+        description="Estimation-window returns are clipped at this many robust "
+        "standard deviations from the median, so earlier shocks do not inflate "
+        "sigma_e. 0 turns it off.",
+    )
+    benchmark_market_symbol: str = Field(
+        default="SPY", description="The market factor's benchmark."
+    )
+    benchmark_sector_map_json: Annotated[dict[str, str], NoDecode] = Field(
+        default_factory=lambda: dict(PROVISIONAL_SECTOR_BENCHMARKS),
+        description="JSON map of yfinance sector string to benchmark symbol. "
+        "Replaces the provisional default whole. An unmapped sector falls back "
+        "to a market-only model.",
+    )
+    benchmark_industry_map_json: Annotated[dict[str, str], NoDecode] = Field(
+        default_factory=lambda: dict(PROVISIONAL_INDUSTRY_BENCHMARKS),
+        description="JSON map of yfinance industry string to benchmark symbol. "
+        "Takes precedence over the sector map.",
+    )
+
+    # --------------------------------------------- per-movement analytics
+    rvol_lookback_sessions: int = Field(
+        default=20,
+        ge=2,
+        description="Relative volume is the day's volume over the median of "
+        "this many sessions before it.",
+    )
+    drift_label_fraction: float = Field(
+        default=0.5,
+        gt=0,
+        description="Post-move drift is labelled continued or reversed once it "
+        "is at least this fraction of the day's abnormal return, held otherwise.",
+    )
+    regime_window_sessions: int = Field(
+        default=20,
+        ge=2,
+        description="Sessions of returns in the realised-volatility measure.",
+    )
+    regime_lookback_sessions: int = Field(
+        default=252,
+        ge=2,
+        description="Sessions of history the volatility percentile is ranked over.",
+    )
+
+    # ---------------------------------------- session-based news windows
+    news_window_mode: Literal["calendar", "sessions"] = Field(
+        default="calendar",
+        description="calendar: NEWS_WINDOW_DAYS_BEFORE/AFTER calendar days (v1). "
+        "sessions: NEWS_WINDOW_SESSIONS_BEFORE/AFTER XNYS sessions. Applies to "
+        "movements not yet enriched; enriched ones keep the window they were "
+        "searched with, so their cached searches still match. Changing it "
+        "changes the news search requests, so new movements miss the cache once.",
+    )
+    news_window_sessions_before: int = Field(
+        default=2,
+        ge=0,
+        description="Sessions before the move covered, from the close before the first of them.",
+    )
+    news_window_sessions_after: int = Field(
+        default=1,
+        ge=0,
+        description="Sessions after the move covered, through their after-hours.",
+    )
+
     # ------------------------------------------------------------------ chat
     chat_max_movements_in_context: int = Field(default=12, ge=1)
     chat_max_articles_per_movement: int = Field(default=4, ge=1)
@@ -651,6 +792,43 @@ class Settings(BaseSettings):
                 )
                 raise ValueError(f"PLAN_LIMITS_JSON entry for '{plan}': {problems}") from exc
         return limits
+
+    @field_validator("benchmark_sector_map_json", "benchmark_industry_map_json", mode="before")
+    @classmethod
+    def _parse_benchmark_map(cls, v: Any, info: Any) -> Any:
+        name = info.field_name.upper()
+        if not isinstance(v, str):
+            return v
+        if not v.strip():
+            return dict(
+                PROVISIONAL_SECTOR_BENCHMARKS
+                if info.field_name == "benchmark_sector_map_json"
+                else PROVISIONAL_INDUSTRY_BENCHMARKS
+            )
+        try:
+            raw = json.loads(v)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{name} is not valid JSON: {exc}") from exc
+        if not isinstance(raw, dict) or not all(
+            isinstance(key, str) and isinstance(value, str) and value.strip()
+            for key, value in raw.items()
+        ):
+            raise ValueError(f"{name} must be a JSON object of string to symbol")
+        return {key: value.strip().upper() for key, value in raw.items()}
+
+    @model_validator(mode="after")
+    def _check_decomposition_window(self) -> "Settings":
+        if self.decomposition_min_sessions > self.decomposition_estimation_sessions:
+            raise ValueError(
+                "DECOMPOSITION_MIN_SESSIONS cannot exceed DECOMPOSITION_ESTIMATION_SESSIONS."
+            )
+        return self
+
+    @property
+    def price_fetch_days(self) -> int:
+        """Calendar days of prices a full fetch asks for: the display window
+        plus the estimation history before it."""
+        return self.price_history_days + self.price_estimation_extra_days
 
     @field_validator("daily_spend_cap_usd", mode="before")
     @classmethod

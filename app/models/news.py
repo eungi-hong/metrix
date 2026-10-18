@@ -101,6 +101,16 @@ class MovementNewsLink(Base, TimestampMixin):
     rationale: Mapped[str | None] = mapped_column(sa.Text)
     search_tier: Mapped[str | None] = mapped_column(sa.String(16))
     scored_by: Mapped[str | None] = mapped_column(sa.String(64))
+    # When the article was published relative to the move's sessions
+    # (app.services.sessions): before_prior_close, overnight, intraday,
+    # after_close or later, and whether that is from a time ("time") or only
+    # a date ("day"). NULL when unknown.
+    timing: Mapped[str | None] = mapped_column(sa.String(24))
+    timing_precision: Mapped[str | None] = mapped_column(sa.String(8))
+    # Set when a later scoring pass no longer supports this link. The link was
+    # paid for, so it is kept and hidden rather than deleted, and cleared if a
+    # later pass supports it again.
+    superseded_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
 
     movement: Mapped["Movement"] = relationship(back_populates="news_links", lazy="noload")
     article: Mapped[NewsArticle] = relationship(back_populates="links", lazy="joined")
