@@ -4722,6 +4722,85 @@
         ]
       }
     },
+    "/chat/stream": {
+      "post": {
+        "operationId": "chat_stream_chat_stream_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "X-Exa-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Exa-Api-Key"
+            }
+          },
+          {
+            "in": "header",
+            "name": "X-OpenAI-Api-Key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Openai-Api-Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "text/event-stream": {}
+            },
+            "description": "Events: tool_call, tool_result, delta (provisional answer text), done (the full ChatResponse, with checked citations), error."
+          },
+          "404": {
+            "description": "No such conversation (or not yours)."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "The same as POST /chat, streamed as server-sent events",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
     "/conversations": {
       "get": {
         "operationId": "list_conversations_conversations_get",
