@@ -3,6 +3,18 @@
 One entry per phase, newest first. Each phase ships on its own branch
 (`v2/<phase>-<slug>`) and pull request.
 
+## Phase 7: ship, measure, document (`v2/7-ship-docs`)
+
+- README top rewritten: what Metrix does in 30 seconds, what is new in v2 with a
+  number each, a Mermaid architecture diagram, five design decisions, honest
+  limitations, every v2 endpoint; architecture tree and tests updated.
+- [RESULTS.md](RESULTS.md): quotable claims with their commands, the numbers that
+  did not improve, the ones that still need real data, and the daily cost impact.
+- [WALKTHROUGH.md](WALKTHROUGH.md): a 90-second recording script.
+- [SHIP.md](SHIP.md): merge order, migrations, settings, the backfill and the first
+  nightly run, and how to pick and verify the showcase case files. Not deployed
+  from here.
+
 ## Phase 6: the web app, rebuilt (`v2/6-frontend`)
 
 - Every view has a URL: home, `/t/:symbol` (chart, moves table, selected move),
