@@ -169,12 +169,36 @@ async def test_re_enrichment_rescores_the_fuller_set_without_duplicates(
     provider.easy_urls = ["https://n.test/late", "https://n.test/a", "https://n.test/b"]
     await ingestion.ingest_ticker(session, "TEST", llm=stub_llm, news_provider=provider)
 
-    second = {link.article.url: link.relevance_score for link in await links(session)}
-    # `late` takes the top slot, `a` is re-scored in place, and `b`, which the
-    # scorer no longer supports, is unlinked rather than left with a stale score.
+    second = {link.article.url: link.relevance_score for link in await current_links(session)}
+    # `late` takes the top slot and `a` is re-scored in place. `b`, which the
+    # scorer no longer supports, was paid for: it is kept, marked superseded,
+    # and no longer current (v2 Phase 1 changed this from deleting it).
     assert second == {"https://n.test/late": 0.91, "https://n.test/a": 0.62}
+    superseded = [link for link in await links(session) if link.superseded_at is not None]
+    assert [link.article.url for link in superseded] == ["https://n.test/b"]
     assert await session.scalar(sa.select(sa.func.count()).select_from(NewsArticle)) == 3
     assert (await only_movement(session)).news_status == NewsStatus.COMPLETE
+
+
+async def test_a_superseded_link_is_current_again_when_a_later_pass_supports_it(
+    session, stub_llm, recent_move, advance_clock
+):
+    provider = ScriptedProvider(published=recent_move)
+    provider.easy_urls = ["https://n.test/a", "https://n.test/b"]
+    await ingestion.ingest_ticker(session, "TEST", llm=stub_llm, news_provider=provider)
+    advance_clock(PAST_THE_WINDOW)
+    provider.easy_urls = ["https://n.test/late", "https://n.test/a", "https://n.test/b"]
+    await ingestion.ingest_ticker(session, "TEST", llm=stub_llm, news_provider=provider)
+
+    movement = await only_movement(session)
+    movement.news_status = NewsStatus.PENDING  # let a third pass run
+    await session.commit()
+    provider.easy_urls = ["https://n.test/b", "https://n.test/late"]
+    await ingestion.enrich_movement(session, movement.id, llm=stub_llm, news_provider=provider)
+
+    current = {link.article.url: link.relevance_score for link in await current_links(session)}
+    assert current == {"https://n.test/b": 0.91, "https://n.test/late": 0.62}
+    assert len(await links(session)) == 3  # nothing was ever deleted
 
 
 async def test_an_empty_second_search_keeps_the_first_pass_links(
@@ -192,8 +216,14 @@ async def test_an_empty_second_search_keeps_the_first_pass_links(
 
 
 async def links(session) -> list[MovementNewsLink]:
+    """Every stored link, superseded ones included."""
     session.expire_all()
     return list((await session.scalars(sa.select(MovementNewsLink))).all())
+
+
+async def current_links(session) -> list[MovementNewsLink]:
+    """The links the API and chat show: not superseded."""
+    return [link for link in await links(session) if link.superseded_at is None]
 
 
 # ------------------------------------------------------------- attempt cap

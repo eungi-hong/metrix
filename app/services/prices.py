@@ -208,7 +208,7 @@ async def fetch_price_history(symbol: str, days: int | None = None) -> PriceHist
         TickerNotFoundError: the symbol returned no data at all.
         PriceDataError: the fetch failed or returned nothing usable.
     """
-    days = days or settings.price_history_days
+    days = days or settings.price_fetch_days
     symbol = symbol.strip().upper()
     logger.info("price_fetch_start", symbol=symbol, days=days)
     for _ in range(YF_CALLS_PER_SINGLE_FETCH):

@@ -21,6 +21,22 @@ hash; movement/article links carry a uniqueness constraint. A movement whose
 news enrichment is COMPLETE is not re-enriched, so a re-run costs no LLM calls
 for work already done.
 
+Paid work is never deleted
+--------------------------
+A stored movement that stops qualifying (revised prices, retuned parameters,
+another detection mode) is kept with `qualifies = false` when it has links or
+a completed enrichment, and deleted only when it has neither. A link a later
+scoring pass no longer supports is marked `superseded_at`, not deleted. Both
+are hidden from the API and chat, and come back if they qualify again.
+
+Analytics
+---------
+`refresh_prices` also computes each stored movement's decomposition, session
+legs, relative volume, post-move drift and volatility regime from the stored
+bars and the benchmarks' stored bars (`app.services.analytics`), so the
+nightly refresh keeps drift current. `backfill_analytics` does the same for a
+ticker on its own, without detection, news or any LLM call.
+
 Freshness
 ---------
 A movement's news window runs a day past the move, so enrichment that runs
@@ -50,9 +66,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Any
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -72,10 +88,11 @@ from app.models.enums import IngestStatus, NewsStatus
 from app.models.jobs import JobKind, JobSource
 from app.models.market import PRICE_DECIMALS, Movement, PriceBar, Ticker
 from app.models.news import MovementNewsLink, NewsArticle, url_fingerprint
+from app.services import analytics, benchmarks, detection, sessions
 from app.services import prices as price_service
 from app.services import queue
 from app.services.llm import LLMProvider, get_llm_client
-from app.services.movements import DailyReturn, DetectionParams, detect_movements
+from app.services.movements import DailyReturn, DetectionParams, compute_returns
 from app.services.news import NewsProvider, build_news_provider
 from app.services.news.base import NewsCandidate, within_window
 from app.services.news.queries import (
@@ -157,6 +174,8 @@ def needs_enrichment(
     would pay again for a result that is still provisional. FAILED movements
     are retried until `NEWS_MAX_ATTEMPTS`, then only when `retry_exhausted`.
     """
+    if movement.qualifies is False:
+        return False  # kept only because it was paid for; no longer a movement
     status = movement.news_status
     if status == NewsStatus.COMPLETE:
         return False
@@ -172,15 +191,18 @@ def needs_enrichment_clause(now: datetime) -> sa.ColumnElement[bool]:
 
     The two must agree; a test holds them to the same answers.
     """
-    return sa.or_(
-        Movement.news_status == NewsStatus.PENDING,
-        sa.and_(
-            Movement.news_status == NewsStatus.PARTIAL,
-            Movement.news_window_closes_at <= now,
-        ),
-        sa.and_(
-            Movement.news_status == NewsStatus.FAILED,
-            Movement.news_attempts < settings.news_max_attempts,
+    return sa.and_(
+        Movement.qualifies.is_(True),
+        sa.or_(
+            Movement.news_status == NewsStatus.PENDING,
+            sa.and_(
+                Movement.news_status == NewsStatus.PARTIAL,
+                Movement.news_window_closes_at <= now,
+            ),
+            sa.and_(
+                Movement.news_status == NewsStatus.FAILED,
+                Movement.news_attempts < settings.news_max_attempts,
+            ),
         ),
     )
 
@@ -374,7 +396,7 @@ class PriceRefresh:
     """What `refresh_prices` stored and found."""
 
     bars_written: int
-    # Every movement detected in the stored history, after this refresh.
+    # Every stored movement that qualifies, after this refresh.
     movements: list[Movement]
     # Movements that did not exist before this refresh.
     created: list[Movement]
@@ -386,33 +408,24 @@ class PriceRefresh:
 async def refresh_prices(
     session: AsyncSession, ticker: Ticker, history: price_service.PriceHistory
 ) -> PriceRefresh:
-    """Store fetched bars, apply the profile, and re-run movement detection.
+    """Store fetched bars, apply the profile, re-run detection, and refresh
+    every stored movement's analytics.
 
-    `history` may be the full trailing year or only the last few weeks: it is
+    `history` may be the full history or only the last few weeks: it is
     merged with the bars already stored (rebasing them if a split or dividend
     has revised adjusted closes since), and detection runs over the merged
     series. Each day's rolling volatility is therefore computed from the full
     run of days before it, not just from what this fetch returned.
 
+    Which days qualify depends on MOVEMENT_DETECTION_MODE
+    (`app.services.detection`). New movements are created only inside the
+    display window (PRICE_HISTORY_DAYS before the latest bar); older bars are
+    estimation history for the decomposition.
+
     Flushes but does not commit. Assumes the caller holds the ticker claim,
     since this rewrites the ticker's bars and may delete movements.
     """
-    stored = [
-        price_service.PriceBarData(
-            date=bar.date,
-            open=_as_float(bar.open),
-            high=_as_float(bar.high),
-            low=_as_float(bar.low),
-            close=_as_float(bar.close),
-            adj_close=float(bar.adj_close),
-            volume=bar.volume,
-        )
-        for bar in (
-            await session.scalars(
-                sa.select(PriceBar).where(PriceBar.ticker_id == ticker.id)
-            )
-        ).all()
-    ]
+    stored = await _stored_bars(session, ticker.id)
     merged = price_service.merge_price_bars(stored, history.bars)
     if merged.rebased_by is not None:
         logger.info(
@@ -430,8 +443,28 @@ async def refresh_prices(
     bars_written = await _upsert_price_bars(session, ticker, merged.bars)
 
     params = DetectionParams.from_settings()
-    detected = detect_movements([bar.to_point() for bar in merged.bars], params)
-    movements, created = await _upsert_movements(session, ticker, detected, params)
+    returns = compute_returns([bar.to_point() for bar in merged.bars], params)
+    display_start = (
+        merged.bars[-1].date - timedelta(days=settings.price_history_days) if merged.bars else None
+    )
+    context = await load_benchmark_context(session, ticker)
+    aligned = context.align(merged.bars)
+    existing_dates = set(
+        (await session.scalars(sa.select(Movement.date).where(Movement.ticker_id == ticker.id))).all()
+    )
+    readings = _abnormal_readings(returns, aligned, merged.bars, existing_dates, display_start)
+    verdicts = detection.evaluate(
+        returns,
+        readings,
+        mode=settings.movement_detection_mode,
+        abnormal_k=settings.movement_abnormal_k,
+        floor=params.floor,
+        floor_basis=settings.movement_abnormal_floor_basis,
+    )
+    movements, created = await _upsert_movements(
+        session, ticker, verdicts, params, display_start=display_start
+    )
+    await apply_analytics(session, ticker, merged.bars, context=context, aligned=aligned)
     return PriceRefresh(
         bars_written=bars_written,
         movements=movements,
@@ -498,15 +531,43 @@ async def _upsert_price_bars(
     return written
 
 
+def _abnormal_readings(
+    returns: list[DailyReturn],
+    aligned: analytics.AlignedReturns | None,
+    bars: list[price_service.PriceBarData],
+    existing_dates: set[date],
+    display_start: date | None,
+) -> dict[date, detection.AbnormalReading | None]:
+    """The decomposition's reading of each day detection needs one for.
+
+    In raw mode only raw-flagged days (for their `trigger`); in abnormal and
+    union modes every day that could become or stay a movement: inside the
+    display window, or already stored.
+    """
+    raw_only = settings.movement_detection_mode == "raw"
+    needed = [
+        day.date
+        for day in returns
+        if (day.date in existing_dates or display_start is None or day.date >= display_start)
+        and (day.is_major or not raw_only)
+    ]
+    return analytics.abnormal_readings(aligned, bars, needed, analytics_params())
+
+
 async def _upsert_movements(
     session: AsyncSession,
     ticker: Ticker,
-    detected: list[DailyReturn],
+    verdicts: list[detection.Verdict],
     params: DetectionParams,
+    *,
+    display_start: date | None = None,
 ) -> tuple[list[Movement], list[Movement]]:
-    """Persist detected movements, preserving news already attached to them.
+    """Persist the qualifying days, preserving news already attached to them.
 
-    Returns every detected movement, and the subset that is new.
+    A new movement is created only inside the display window. A stored one
+    that no longer qualifies is kept, with `qualifies = false`, if it has
+    links or a completed enrichment (paid work), and deleted only if it has
+    neither. Returns every qualifying movement, and the subset that is new.
     """
     existing: dict[object, Movement] = {
         m.date: m
@@ -519,10 +580,15 @@ async def _upsert_movements(
 
     kept: list[Movement] = []
     created: list[Movement] = []
-    for item in detected:
+    for verdict in verdicts:
+        if not verdict.qualifies:
+            continue
+        item = verdict.day
         movement = existing.get(item.date)
         if movement is None:
-            movement = Movement(ticker_id=ticker.id, date=item.date)
+            if display_start is not None and item.date < display_start:
+                continue  # estimation history: never flagged, never enriched
+            movement = Movement(ticker_id=ticker.id, date=item.date, news_attempts=0)
             session.add(movement)
             created.append(movement)
         movement.daily_return = item.daily_return
@@ -537,18 +603,53 @@ async def _upsert_movements(
         movement.detector_k = params.k
         movement.detector_window = params.window
         movement.detector_floor = params.floor
-        movement.news_window_closes_at = news_window_closes_at(item.date)
+        movement.trigger = verdict.trigger
+        movement.qualifies = True
+        if not movement.news_attempts and movement.news_status in (None, NewsStatus.PENDING):
+            # Not searched yet: it gets the window mode in force now. Once
+            # searched, it keeps its own, so re-enrichment hits the cache.
+            movement.news_window_mode = settings.news_window_mode
+        movement.news_window_closes_at = news_window_closes_at(item.date, movement.news_window_mode)
         kept.append(movement)
 
-    # A day that no longer clears the threshold (revised prices, or retuned
-    # parameters) stops being a movement, and its links go with it.
-    detected_dates = {item.date for item in detected}
-    for date_key, movement in existing.items():
-        if date_key not in detected_dates:
+    qualifying = {movement.date for movement in kept}
+    gone = [m for day, m in existing.items() if day not in qualifying]
+    paid = await _movements_with_paid_work(session, gone)
+    for movement in gone:
+        if movement.id in paid:
+            if movement.qualifies:
+                logger.info(
+                    "movement_no_longer_qualifies",
+                    symbol=ticker.symbol,
+                    date=str(movement.date),
+                    news_status=movement.news_status.value,
+                )
+            movement.qualifies = False
+        else:
             await session.delete(movement)
 
     await session.flush()
     return kept, created
+
+
+async def _movements_with_paid_work(session: AsyncSession, movements: list[Movement]) -> set[int]:
+    """Ids of those movements that have any link or a finished enrichment."""
+    if not movements:
+        return set()
+    ids = [m.id for m in movements]
+    linked = set(
+        (
+            await session.scalars(
+                sa.select(MovementNewsLink.movement_id)
+                .where(MovementNewsLink.movement_id.in_(ids))
+                .distinct()
+            )
+        ).all()
+    )
+    enriched = {
+        m.id for m in movements if m.news_status in (NewsStatus.COMPLETE, NewsStatus.PARTIAL)
+    }
+    return linked | enriched
 
 
 async def _enrich_movement(
@@ -576,6 +677,7 @@ async def _enrich_movement(
         movement_date=movement.date,
         daily_return=movement.daily_return,
         direction=movement.direction.value,
+        window_mode=movement.news_window_mode,
     )
 
     try:
@@ -595,7 +697,8 @@ async def _enrich_movement(
         _record_failure(movement, result, exc, f"{movement.date}: scoring: {exc}")
         return 0
 
-    window_start, window_end = search_window(movement.date)
+    window_start, window_end = search_window(movement.date, movement.news_window_mode)
+    frame = sessions.frame_for(movement.date)
     linked = 0
     kept_articles: set[int] = set()
     for item in scored:
@@ -618,10 +721,10 @@ async def _enrich_movement(
             continue
 
         kept_articles.add(article.id)
-        if await _link(session, movement, article, item):
+        if await _link(session, movement, article, item, frame):
             linked += 1
 
-    await _prune_links(session, movement, kept_articles)
+    await _supersede_links(session, movement, kept_articles)
     await _mark_enriched(session, movement, allow_followup_jobs=allow_followup_jobs)
     await session.flush()
     return linked
@@ -652,22 +755,26 @@ async def _mark_enriched(
         )
 
 
-async def _prune_links(
+async def _supersede_links(
     session: AsyncSession, movement: Movement, kept_articles: set[int]
 ) -> None:
-    """Drop links from an earlier pass that this pass's scorer did not support.
+    """Mark links from an earlier pass that this pass's scorer did not support.
 
     On re-enrichment the scorer sees a fuller candidate set and ranks the old
     articles against new ones; an article it now scores below the threshold no
-    longer explains the move as well as the alternatives, and keeping its old
-    link would show a verdict the current pass contradicts.
+    longer explains the move as well as the alternatives, and showing its old
+    link would show a verdict the current pass contradicts. The link was paid
+    for, though, so it is kept with `superseded_at` set and hidden, not
+    deleted; a later pass that supports it again clears the mark.
     """
     await session.execute(
-        sa.delete(MovementNewsLink)
+        sa.update(MovementNewsLink)
         .where(
             MovementNewsLink.movement_id == movement.id,
             MovementNewsLink.article_id.not_in(kept_articles),
+            MovementNewsLink.superseded_at.is_(None),
         )
+        .values(superseded_at=_now())
         .execution_options(synchronize_session=False)
     )
 
@@ -749,8 +856,10 @@ async def _link(
     movement: Movement,
     article: NewsArticle,
     item: ScoredCandidate,
+    frame: sessions.SessionFrame | None = None,
 ) -> bool:
     """Create or refresh the movement/article link. True if newly created."""
+    timing = sessions.classify(article.published_at, frame)
     link = await session.scalar(
         sa.select(MovementNewsLink).where(
             MovementNewsLink.movement_id == movement.id,
@@ -763,6 +872,9 @@ async def _link(
         link.rationale = item.rationale
         link.search_tier = item.search_tier
         link.scored_by = item.scored_by
+        link.timing = timing.timing
+        link.timing_precision = timing.precision
+        link.superseded_at = None  # supported again
         return False
 
     session.add(
@@ -774,10 +886,283 @@ async def _link(
             rationale=item.rationale,
             search_tier=item.search_tier,
             scored_by=item.scored_by,
+            timing=timing.timing,
+            timing_precision=timing.precision,
         )
     )
     await session.flush()
     return True
+
+
+# ------------------------------------------------- benchmarks and analytics
+
+
+async def _stored_bars(session: AsyncSession, ticker_id: int) -> list[price_service.PriceBarData]:
+    """A ticker's stored bars as floats, oldest first.
+
+    Prices are NUMERIC in the database; everything downstream does float
+    arithmetic, so the conversion happens once, here.
+    """
+    rows = (
+        await session.scalars(
+            sa.select(PriceBar).where(PriceBar.ticker_id == ticker_id).order_by(PriceBar.date)
+        )
+    ).all()
+    return [
+        price_service.PriceBarData(
+            date=bar.date,
+            open=_as_float(bar.open),
+            high=_as_float(bar.high),
+            low=_as_float(bar.low),
+            close=_as_float(bar.close),
+            adj_close=float(bar.adj_close),
+            volume=bar.volume,
+        )
+        for bar in rows
+    ]
+
+
+async def _stored_bars_for(session: AsyncSession, symbol: str) -> list[price_service.PriceBarData]:
+    ticker_id = await session.scalar(sa.select(Ticker.id).where(Ticker.symbol == symbol))
+    return await _stored_bars(session, ticker_id) if ticker_id is not None else []
+
+
+def analytics_params() -> analytics.AnalyticsParams:
+    return analytics.AnalyticsParams(
+        estimation_sessions=settings.decomposition_estimation_sessions,
+        min_sessions=settings.decomposition_min_sessions,
+        winsor_z=settings.decomposition_winsor_z,
+        rvol_lookback_sessions=settings.rvol_lookback_sessions,
+        drift_label_fraction=settings.drift_label_fraction,
+        regime_window_sessions=settings.regime_window_sessions,
+        regime_lookback_sessions=settings.regime_lookback_sessions,
+    )
+
+
+@dataclass(slots=True)
+class BenchmarkContext:
+    """The benchmarks one ticker is decomposed against, with their stored bars.
+
+    `unavailable` says why no day of this ticker can be decomposed (it is a
+    benchmark itself, or the market benchmark has no stored prices yet);
+    `note` is a caveat on the days that can (a market-only model).
+    """
+
+    market: str | None = None
+    sector: str | None = None
+    market_bars: list[price_service.PriceBarData] = field(default_factory=list)
+    sector_bars: list[price_service.PriceBarData] | None = None
+    unavailable: str | None = None
+    note: str | None = None
+
+    def align(self, bars: list[price_service.PriceBarData]) -> analytics.AlignedReturns | None:
+        if self.unavailable is not None:
+            return None
+        return analytics.align_returns(bars, self.market_bars, self.sector_bars)
+
+
+async def load_benchmark_context(session: AsyncSession, ticker: Ticker) -> BenchmarkContext:
+    if ticker.is_benchmark or benchmarks.is_benchmark(ticker.symbol):
+        return BenchmarkContext(unavailable="this ticker is a benchmark; raw detection only")
+    choice = benchmarks.choose(ticker.sector, ticker.industry)
+    market_bars = await _stored_bars_for(session, choice.market)
+    if not market_bars:
+        return BenchmarkContext(
+            market=choice.market,
+            unavailable=f"no stored prices for the market benchmark {choice.market} yet; "
+            "raw detection only until the nightly run fetches them",
+        )
+    context = BenchmarkContext(market=choice.market, market_bars=market_bars, note=choice.note)
+    if choice.note is not None:
+        logger.info("benchmark_sector_unmapped", symbol=ticker.symbol, sector=ticker.sector, industry=ticker.industry)
+    if choice.sector is not None:
+        sector_bars = await _stored_bars_for(session, choice.sector)
+        if sector_bars:
+            context.sector, context.sector_bars = choice.sector, sector_bars
+        else:
+            context.note = f"no stored prices for the sector benchmark {choice.sector} yet; market-only model"
+    return context
+
+
+async def apply_analytics(
+    session: AsyncSession,
+    ticker: Ticker,
+    bars: list[price_service.PriceBarData],
+    *,
+    context: BenchmarkContext | None = None,
+    aligned: analytics.AlignedReturns | None = None,
+) -> int:
+    """Recompute and store every stored movement's analytics. Returns how many.
+
+    Includes movements kept with `qualifies = false`: their numbers stay
+    true to the stored bars. Flushes, does not commit.
+    """
+    if context is None:
+        context = await load_benchmark_context(session, ticker)
+        aligned = context.align(bars)
+    params = analytics_params()
+    now = _now()
+    movements = (
+        await session.scalars(sa.select(Movement).where(Movement.ticker_id == ticker.id))
+    ).all()
+    for movement in movements:
+        result = analytics.analyse(
+            movement.date, bars, aligned, params, unavailable_reason=context.unavailable
+        )
+        _store_analytics(movement, result, context, now)
+    await session.flush()
+    return len(movements)
+
+
+def _store_analytics(
+    movement: Movement,
+    result: analytics.MovementAnalytics,
+    context: BenchmarkContext,
+    now: datetime,
+) -> None:
+    d = result.decomposition
+    model = d.model if d is not None else None
+    movement.decomposition_model = model.kind if model is not None else None
+    movement.market_benchmark = context.market if model is not None else None
+    movement.sector_benchmark = (
+        context.sector if model is not None and model.kind == "market_sector" else None
+    )
+    movement.estimation_sessions = model.sessions if model is not None else None
+    movement.alpha = model.alpha if model is not None else None
+    movement.beta_market = model.beta_market if model is not None else None
+    movement.beta_sector = (
+        model.beta_sector if model is not None and model.kind == "market_sector" else None
+    )
+    movement.r_squared = model.r_squared if model is not None else None
+    movement.sigma_e = model.sigma_e if model is not None else None
+    movement.market_component = d.market if d is not None else None
+    movement.sector_component = d.sector if d is not None else None
+    movement.expected_return = d.expected if d is not None else None
+    movement.abnormal_return = d.abnormal if d is not None else None
+    movement.sar = d.sar if d is not None else None
+    movement.dominant_component = d.dominant if d is not None else None
+    movement.decomposition_warning = result.decomposition_warning if d is None else context.note
+    movement.gap_return = result.gap
+    movement.intraday_return = result.intraday
+    movement.relative_volume = result.relative_volume
+    movement.car_5 = result.car_short
+    movement.car_20 = result.car_long
+    movement.drift_5_label = result.drift_short
+    movement.drift_20_label = result.drift_long
+    movement.realized_vol = result.realized_vol
+    movement.realized_vol_percentile = result.realized_vol_percentile
+    movement.analytics_computed_at = now
+
+
+async def store_benchmark_prices(
+    session: AsyncSession, ticker: Ticker, history: price_service.PriceHistory
+) -> int:
+    """Store a benchmark's bars: merged and upserted like any ticker's, but no
+    detection and no movements. Returns bars written. Flushes, does not commit.
+
+    Leaves the ingestion status alone, so a user who asks for the benchmark
+    itself as a ticker still gets an ordinary first ingestion.
+    """
+    stored = await _stored_bars(session, ticker.id)
+    merged = price_service.merge_price_bars(stored, history.bars)
+    _apply_profile(ticker, history.profile)
+    ticker.is_benchmark = True
+    return await _upsert_price_bars(session, ticker, merged.bars)
+
+
+def history_is_shallow(bars: list[price_service.PriceBarData], today: date) -> bool:
+    """Whether stored bars stop short of the estimation history a full fetch gives.
+
+    `HISTORY_DEPTH_TOLERANCE_DAYS` absorbs weekends and holidays at the start
+    of a fetch. A ticker listed more recently than that is always shallow;
+    fetching its whole (short) life again costs one batched request.
+    """
+    if not bars:
+        return True
+    wanted_from = today - timedelta(days=settings.price_fetch_days - HISTORY_DEPTH_TOLERANCE_DAYS)
+    return bars[0].date > wanted_from
+
+
+# Calendar days by which stored history may start later than a full fetch's
+# first requested day and still count as deep enough.
+HISTORY_DEPTH_TOLERANCE_DAYS = 14
+
+
+@dataclass(slots=True)
+class BackfillResult:
+    symbol: str
+    bars_written: int = 0
+    movements: int = 0
+    links_timed: int = 0
+    skipped: str | None = None
+
+
+async def backfill_analytics(session: AsyncSession, ticker: Ticker) -> BackfillResult:
+    """Compute analytics for a ticker's stored movements, and its links' timing.
+
+    No detection, no news, no LLM: it never creates, deletes or re-flags a
+    movement. If the stored bars do not reach back far enough for the
+    estimation window, the full history is fetched from yfinance first
+    (free, and rate limited like every price fetch). Takes the ticker claim
+    while it writes bars; if a run holds it, that run computes the same
+    analytics, and this one is skipped. Commits.
+    """
+    result = BackfillResult(symbol=ticker.symbol)
+    # The claim marks the ticker RUNNING and clears its error; a backfill is
+    # not an ingestion, so whatever state it had is put back afterwards.
+    before = (
+        ticker.ingest_status,
+        ticker.ingest_error,
+        ticker.ingest_error_permanent,
+        ticker.ingest_started_at,
+    )
+    if not await claim_ingestion(session, ticker):
+        result.skipped = "another run holds the ticker"
+        return result
+    try:
+        bars = await _stored_bars(session, ticker.id)
+        if history_is_shallow(bars, _now().date()) and not ticker.is_benchmark:
+            history = await price_service.fetch_price_history(ticker.symbol, settings.price_fetch_days)
+            merged = price_service.merge_price_bars(bars, history.bars)
+            result.bars_written = await _upsert_price_bars(session, ticker, merged.bars)
+            bars = merged.bars
+        result.movements = await apply_analytics(session, ticker, bars)
+        result.links_timed = await _time_untimed_links(session, ticker)
+        await session.commit()
+    except BaseException:
+        await session.rollback()
+        raise
+    finally:
+        ticker = await session.get(Ticker, ticker.id) or ticker
+        (
+            ticker.ingest_status,
+            ticker.ingest_error,
+            ticker.ingest_error_permanent,
+            ticker.ingest_started_at,
+        ) = before
+        await session.commit()
+    logger.info("analytics_backfilled", **asdict(result))
+    return result
+
+
+async def _time_untimed_links(session: AsyncSession, ticker: Ticker) -> int:
+    """Session timing for links stored before timing existed."""
+    rows = (
+        await session.execute(
+            sa.select(MovementNewsLink, Movement.date, NewsArticle.published_at)
+            .join(Movement, Movement.id == MovementNewsLink.movement_id)
+            .join(NewsArticle, NewsArticle.id == MovementNewsLink.article_id)
+            .where(Movement.ticker_id == ticker.id, MovementNewsLink.timing_precision.is_(None))
+        )
+    ).all()
+    timed = 0
+    for link, movement_date, published_at in rows:
+        timing = sessions.classify(published_at, sessions.frame_for(movement_date))
+        if timing.precision is not None:
+            link.timing, link.timing_precision = timing.timing, timing.precision
+            timed += 1
+    await session.flush()
+    return timed
 
 
 # ------------------------------------------------------------ queued work

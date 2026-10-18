@@ -83,6 +83,9 @@ PRIORITY_INTERACTIVE = 0
 PRIORITY_NIGHTLY_FANOUT = 5
 PRIORITY_MACRO = 10
 PRIORITY_FOLLOWUP = 90
+# Analytics backfills: free (no news, no LLM), so behind everything that costs
+# money or that a user is waiting for.
+PRIORITY_BACKFILL = 95
 
 # Retry delays are scaled by a random factor in [1 - f, 1 + f], so jobs that
 # failed together (a provider outage) do not all retry in the same second.
@@ -120,6 +123,10 @@ def followup_key(movement_id: int) -> str:
 
 def macro_key(sector: str | None, day: date) -> str:
     return f"macro:{(sector or '').strip() or UNKNOWN_SECTOR}:{day.isoformat()}"
+
+
+def analytics_key(symbol: str) -> str:
+    return f"analytics:{symbol.strip().upper()}"
 
 
 def nightly_key(trading_date: date) -> str:

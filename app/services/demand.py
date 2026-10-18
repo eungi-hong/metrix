@@ -56,6 +56,7 @@ from app.models.demand import TickerDemand
 from app.models.enums import IngestStatus
 from app.models.identity import Plan
 from app.models.market import Ticker
+from app.services import benchmarks
 from app.services.auth import Principal
 from app.services.limits import DAILY_KEY_GRACE_SECONDS, day_end, get_limiter
 
@@ -242,7 +243,10 @@ async def select_prewarm_universe(
     }
     top = sorted(popularity, key=lambda s: (-popularity[s], s))[: settings.prewarm_top_n]
 
-    symbols = (set(seeds) - excluded) | set(top) | recent
+    # Benchmarks are refreshed as data by the first price chunk, never ranked
+    # or enriched as products (app.services.benchmarks).
+    excluded |= set(benchmarks.all_symbols())
+    symbols = ((set(seeds) | set(top) | recent) - excluded)
     entries = [
         UniverseEntry(
             symbol=symbol,
