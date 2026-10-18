@@ -444,6 +444,12 @@ class Settings(BaseSettings):
     http_cache_stale_seconds: int = Field(
         default=300, ge=0, description="Cache-Control stale-while-revalidate on settled ticker responses."
     )
+    prewarm_peer_symbols_max: int = Field(
+        default=60,
+        ge=0,
+        description="Peers of the nightly universe whose prices (only) the first chunk "
+        "also refreshes, for the case file's peer returns. 0 turns it off.",
+    )
     sse_heartbeat_seconds: float = Field(default=15.0, gt=0, description="Comment line this often on /events.")
     sse_max_seconds: float = Field(
         default=300.0, gt=0, description="An /events stream ends after this long; the client reconnects."

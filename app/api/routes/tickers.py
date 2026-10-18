@@ -53,6 +53,7 @@ from app.schemas.market import (
     ComponentOut,
     DecompositionOut,
     DriftOut,
+    EvidenceStatusOut,
     FilingOut,
     IngestState,
     LegsOut,
@@ -71,6 +72,7 @@ from app.schemas.market import (
 from app.services import (
     benchmarks,
     demand,
+    evidence,
     ingestion,
     queue,
     quotas,
@@ -227,6 +229,8 @@ async def get_ticker_detail(
     # Settled data (not mid-ingest, not failed, not bought with the caller's
     # own keys) is validated with an ETag and cached by it; see
     # app.services.response_cache.
+    now = datetime.now(timezone.utc)
+    jobs = await evidence.active_jobs(session, ticker.id)
     etag: str | None = None
     if state in ("ready", "refreshing") and not provider_credentials.supplied_by_user:
         etag = response_cache.etag_for(
@@ -238,6 +242,7 @@ async def get_ticker_detail(
                 "message": ensured.message,
                 "job_id": ensured.job_id,
                 "warnings": ensured.warnings,
+                "evidence": evidence.fingerprint(jobs, now),
             }
         )
         headers = {
@@ -330,7 +335,7 @@ async def get_ticker_detail(
         pagination=PaginationOut(
             limit=limit, offset=offset, total=total or 0, returned=len(movements)
         ),
-        movements=[_movement_out(m, tier) for m in movements],
+        movements=[_movement_out(m, tier, jobs, now) for m in movements],
         warnings=ensured.warnings,
         benchmarks=(
             await _benchmark_series(session, ticker, start, end) if include_benchmarks else None
@@ -688,12 +693,24 @@ _ORDER: dict[str, tuple[sa.ColumnElement, ...]] = {
 
 
 def _movement_out(
-    movement: Movement, tiers: list[RelevanceTier] | None
+    movement: Movement,
+    tiers: list[RelevanceTier] | None,
+    jobs: dict[int, evidence.ActiveJob] | None = None,
+    now: datetime | None = None,
 ) -> MovementOut:
     links = sorted(
         (link for link in movement.news_links if link.superseded_at is None),
         key=lambda l: l.relevance_score,
         reverse=True,
+    )
+    current_filings = [
+        mf for mf in movement.filings if mf.superseded_at is None and mf.relevance_score is not None
+    ]
+    status = evidence.status_for(
+        movement,
+        has_evidence=bool(links) or bool(current_filings),
+        job=(jobs or {}).get(movement.id),
+        now=now or datetime.now(timezone.utc),
     )
     if tiers:
         links = [link for link in links if link.relevance_tier in tiers]
@@ -738,6 +755,12 @@ def _movement_out(
             for link in links
         ],
         filings=[_filing_out(mf) for mf in sorted(movement.filings, key=lambda mf: mf.filing.accepted_at or datetime.min.replace(tzinfo=timezone.utc))],
+        evidence=EvidenceStatusOut(
+            state=status.state,
+            detail=status.detail,
+            window_closes_at=status.window_closes_at,
+            expected_by=status.expected_by,
+        ),
         evidence_abstained=movement.evidence_abstained,
         abstain_reason=movement.abstain_reason,
         trigger=movement.trigger or "raw",

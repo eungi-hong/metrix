@@ -1160,10 +1160,13 @@ def _store_analytics(
 
 
 async def store_benchmark_prices(
-    session: AsyncSession, ticker: Ticker, history: price_service.PriceHistory
+    session: AsyncSession, ticker: Ticker, history: price_service.PriceHistory, *, benchmark: bool = True
 ) -> int:
     """Store a benchmark's bars: merged and upserted like any ticker's, but no
     detection and no movements. Returns bars written. Flushes, does not commit.
+
+    `benchmark=False` stores a peer's bars the same way without marking it a
+    benchmark (the case file reads peers' same-session returns).
 
     Leaves the ingestion status alone, so a user who asks for the benchmark
     itself as a ticker still gets an ordinary first ingestion.
@@ -1171,7 +1174,8 @@ async def store_benchmark_prices(
     stored = await _stored_bars(session, ticker.id)
     merged = price_service.merge_price_bars(stored, history.bars)
     _apply_profile(ticker, history.profile)
-    ticker.is_benchmark = True
+    if benchmark:
+        ticker.is_benchmark = True
     return await _upsert_price_bars(session, ticker, merged.bars)
 
 

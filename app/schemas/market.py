@@ -91,6 +91,27 @@ class LinkedArticleOut(BaseModel):
     scorer_version: str | None = Field(default=None, description="v1 or v2; null before v2 existed.")
 
 
+EvidenceState = Literal[
+    "explained", "abstained", "no_evidence", "researching", "queued", "budget_deferred",
+    "window_open", "retrying", "failed", "not_started",
+]
+
+
+class EvidenceStatusOut(BaseModel):
+    """Where the movement's evidence stands and when it will be there."""
+
+    state: EvidenceState
+    detail: str
+    window_closes_at: datetime | None = Field(
+        default=None, description="When the movement's news window closes."
+    )
+    expected_by: datetime | None = Field(
+        default=None,
+        description="When research may next start: the queued job's start time, the "
+        "spend cap's reset, or the next nightly run. Null when nothing is owed.",
+    )
+
+
 class FilingOut(BaseModel):
     """An SEC filing in the movement's window, with its session timing, and
     scorer v2's verdict on it when it was judged."""
@@ -231,6 +252,9 @@ class MovementOut(BaseModel):
     regime: RegimeOut | None = None
     filings: list[FilingOut] = Field(
         default_factory=list, description="SEC filings in the news window (when EDGAR is enabled)."
+    )
+    evidence: EvidenceStatusOut | None = Field(
+        default=None, description="Why there is or is not evidence yet, and when there will be."
     )
     evidence_abstained: bool | None = Field(
         default=None, description="Scorer v2: true when it judged that nothing explains the move."

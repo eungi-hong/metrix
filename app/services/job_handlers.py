@@ -163,6 +163,8 @@ async def handle_refresh_prices(session: AsyncSession, job: Job, ctx: JobContext
         now=ingestion._now(),
         progress=ctx.report_progress,
         benchmark_symbols=job.payload.get("benchmarks"),
+        peer_symbols=job.payload.get("peers"),
+        trading_date=date.fromisoformat(job.payload["trading_date"]) if "trading_date" in job.payload else None,
     )
     await ctx.report_progress({"stage": "done", **asdict(outcome)})
 
