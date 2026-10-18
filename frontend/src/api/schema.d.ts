@@ -687,6 +687,12 @@ export interface components {
              * @enum {string}
              */
             answered_by: "model" | "fallback";
+            /**
+             * Citations Removed
+             * @description Citations of labels no lookup returned, removed from the answer.
+             * @default 0
+             */
+            citations_removed: number;
             /** Conversation Id */
             conversation_id: string;
             /**

@@ -348,37 +348,50 @@ curl -H "X-Admin-Token: $ADMIN_TOKEN" "http://localhost:8000/admin/usage?date=20
 How the cap is enforced, and why it cannot be overshot by concurrent calls, is in
 [docs/FAIRNESS.md](docs/FAIRNESS.md).
 
-### Chat
+### Chat (Ask Metrix)
 
 ```bash
 curl -X POST http://localhost:8000/chat -H "Authorization: Bearer $METRIX_API_KEY" \
   -H 'content-type: application/json' \
-  -d '{"ticker": "NVDA", "question": "What drove the biggest drop this year?"}'
+  -d '{"question": "Did AMD and NVDA fall for the same reason in June?"}'
 ```
 
 ```jsonc
 {
   "conversation_id": "6f1c...",
-  "ticker": "NVDA",
-  "answer": "The largest decline was -6.20% on 2026-06-05 [M3], attributed to ...[A2]",
+  "ticker": "AMD",
+  "answer": "Mostly, yes. AMD fell 7.1% on 2026-06-05 [M412] and NVDA 6.2% [M398], both on the same export restriction report [A1033] ...",
   "grounded": true,
-  "sources": {
-    "movements": [{ "ref": "M3", "movement_id": 12, "date": "2026-06-05", ... }],
-    "articles":  [{ "ref": "A2", "article_id": 44, "url": "https://...", ... }]
-  }
+  "answered_by": "model",
+  "tool_calls": [{ "name": "get_movements", "arguments": { "symbol": "AMD", "start": "2026-06-01" }, "summary": "..." }],
+  "sources": { "movements": [...], "articles": [...], "filings": [...] },
+  "citations_removed": 0,
+  "suggestions": ["Why did AMD fall 7.1% on 2026-06-05?", "..."]
 }
 ```
 
-Multi-turn — pass `conversation_id` back, and the ticker carries over:
+How it answers:
 
-```bash
-curl -X POST http://localhost:8000/chat -H "Authorization: Bearer $METRIX_API_KEY" -H 'content-type: application/json' \
-  -d '{"conversation_id": "6f1c...", "question": "Was that company news or macro?"}'
-```
-
-The answer cites `[M3]`/`[A2]` labels that map to the `sources` block, so every claim
-traces back to a row in the database. If nothing relevant is stored, `grounded` is
-`false` and the model is instructed to say so rather than speculate.
+- **It looks things up.** The model gets six read-only tools over the database
+  (`get_movements`, `get_movement_case`, `search_evidence` with Postgres full-text
+  search, `get_filings`, `compare` against SPY, `get_watchlist_digest`), at most five
+  calls and a token budget per question, with the spend cap checked before every
+  model call. Questions about several tickers work; tickers are found by symbol or
+  company name.
+- **Citations are checked.** Every row a tool returns has a label from its id (`M412`,
+  `A1033`, `F7`). After the answer is written, a citation of anything the tools did
+  not return is removed (and counted in `citations_removed`); `sources` lists only
+  what the answer cites, and `grounded` means it cites evidence.
+- **No model, still an answer.** When the model is unavailable, failing, too busy or
+  over the spend cap, the answer is a summary assembled from the database (each
+  ticker's largest moves and their strongest evidence), cited the same way and
+  marked `answered_by: "fallback"`. It does not count against the chat quota.
+- **Follow-ups** come from the data by template, not from the model.
+- **Streaming:** `POST /chat/stream` takes the same body and sends server-sent events
+  as it works: `tool_call`, `tool_result`, `delta` (answer text, provisional), then
+  `done` with the full response above, or `error`.
+- Pass `conversation_id` back to continue; earlier turns are replayed within a token
+  budget. Evaluation: `python -m evals.chat_eval` ([docs/EVALUATION.md](docs/EVALUATION.md)).
 
 ### Research endpoints (read-only)
 

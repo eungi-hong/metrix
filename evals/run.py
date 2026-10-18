@@ -159,7 +159,7 @@ async def score_case(snapshot: Snapshot, label: Label, llm: LLMProvider, *, scor
     return CaseResult(label=label, ranked=ranked, latency_s=latency, notes=notes)
 
 
-async def _ledger_spend_since(start: datetime) -> Decimal:
+async def _ledger_spend_since(start: datetime, operation: str = OPERATION) -> Decimal:
     import sqlalchemy as sa
 
     from app.db.session import SessionLocal
@@ -168,7 +168,7 @@ async def _ledger_spend_since(start: datetime) -> Decimal:
     async with SessionLocal() as session:
         total = await session.scalar(
             sa.select(sa.func.coalesce(sa.func.sum(UsageEvent.cost_usd), 0)).where(
-                UsageEvent.operation == OPERATION, UsageEvent.created_at >= start
+                UsageEvent.operation == operation, UsageEvent.created_at >= start
             )
         )
     return Decimal(str(total or 0))

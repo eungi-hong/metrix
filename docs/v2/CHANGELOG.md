@@ -3,6 +3,24 @@
 One entry per phase, newest first. Each phase ships on its own branch
 (`v2/<phase>-<slug>`) and pull request.
 
+## Phase 5: Ask Metrix 2.0 (`v2/5-ask-metrix`)
+
+- A bounded tool loop: six read-only database tools (movements, the case file,
+  full-text evidence search, filings, comparison against SPY, watchlist digests), at
+  most 5 calls and a token budget per question, the spend cap checked before every
+  model call; the stable system prompt and tools first for provider prompt caching.
+  Multi-ticker questions; indexed ticker lookup by symbol or company name.
+- `tool_turn` on the LLM seam for OpenAI and Anthropic (streamed; Anthropic's prefix
+  marked for caching).
+- Citations checked against what the tools returned; only cited sources returned;
+  `grounded` means cited; `citations_removed`.
+- A deterministic database answer when the model is unavailable or capped (200,
+  `answered_by: "fallback"`, quota given back) instead of 502 and 503.
+- Template follow-up suggestions; history by token budget.
+- `POST /chat/stream` (server-sent events).
+- `evals/chat_eval.py` and 18 questions; the fallback's numbers recorded.
+- Migration `b7e3f1a9c5d2` (Postgres full-text search over articles).
+
 ## Phase 4: research API, read path, live updates (`v2/4-research-api`)
 
 - Read path: `tickers.data_version`, bumped at commit by a session hook for every

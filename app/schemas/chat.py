@@ -89,6 +89,9 @@ class ChatResponse(BaseModel):
         "summary assembled from the database, not written by a model.",
     )
     tool_calls: list[ToolCallOut] = Field(default_factory=list)
+    citations_removed: int = Field(
+        default=0, description="Citations of labels no lookup returned, removed from the answer."
+    )
     suggestions: list[str] = Field(
         default_factory=list, description="Follow-up questions built from the data (not by a model)."
     )

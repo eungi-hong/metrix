@@ -192,6 +192,7 @@ async def answer_question(
         grounded=bool(cited),
         answered_by=result.answered_by,
         tool_calls=result.tool_calls,
+        citations_removed=len(stripped),
         suggestions=suggestions,
     )
 

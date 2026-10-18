@@ -525,6 +525,12 @@
             "title": "Answered By",
             "type": "string"
           },
+          "citations_removed": {
+            "default": 0,
+            "description": "Citations of labels no lookup returned, removed from the answer.",
+            "title": "Citations Removed",
+            "type": "integer"
+          },
           "conversation_id": {
             "title": "Conversation Id",
             "type": "string"

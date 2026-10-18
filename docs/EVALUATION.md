@@ -111,6 +111,59 @@ Commit the snapshots, the labels, the recordings and `evals/results/scorer-v1.js
 then write `evals/baseline.json` from its metrics:
 `{"metrics": {"hit_at_1": ..., "recall_at_5": ..., "tier_accuracy": ..., "timing_violations": ...}, "tolerance": 0.05}`.
 
+## Ask Metrix (chat)
+
+`evals/chat_questions.jsonl` holds 18 questions about the synthetic data that
+`scripts/bench_read_path.py seed` builds (deterministic, so the expected answers
+hold on any fresh seed). Each names what a good answer must cite, by symbol and date
+for movements and by URL for articles. They cover single days, largest moves,
+periods, several tickers at once, a theme search, a question about filings the data
+does not have, and two questions the data cannot answer (a ticker not in the
+database, and no ticker at all).
+
+The checks are deterministic (`evals/chat_eval.py`); no model grades anything:
+
+- **citation precision**: citations of rows on the question's tickers (and in its
+  period), over all citations including any removed as invalid;
+- **required recall**: the must-cite movements and articles that were cited;
+- **uncited numeric claims**: sentences with a percentage or dollar figure and no
+  citation;
+- **mismatched numbers**: a percentage in a sentence citing movements that matches
+  none of their returns, to the rounding shown;
+- the two unanswerable questions must cite nothing and not claim to be grounded.
+
+```bash
+# a throwaway database with the bench seed (its name must contain "bench" or "test")
+export DATABASE_URL=postgresql+asyncpg://metrix:metrix@127.0.0.1:5433/metrix_bench
+alembic upgrade head && NEWS_PROVIDER=fixture python scripts/bench_read_path.py seed
+
+python -m evals.chat_eval --fallback                          # no model, offline
+python -m evals.chat_eval --live --budget-usd 1 --name chat-v2  # records answers
+python -m evals.chat_eval --replay --name chat-v2              # from the recordings
+```
+
+Recordings are keyed by the whole transcript, tool results included, which carry
+database ids: they replay against the database they were made on.
+
+### Today's numbers
+
+Only the database fallback has been measured (no model is reachable where this was
+written): `evals/results/chat-fallback.json`, synthetic-local.
+
+| Metric | Fallback (no model) |
+|---|---|
+| Citation precision | 1.000 |
+| Required recall | 0.821 |
+| Uncited numeric claims | 0 |
+| Mismatched numbers | 0 |
+| Unanswerable questions handled | 2/2 |
+| Grounded | 13 of 18 |
+
+The fallback always lists each ticker's three largest moves, so it misses questions
+about the latest move, the largest gain, or a specific period beyond those three;
+that is the gap the model with tools has to close. The model's numbers come from the
+`--live` run above.
+
 ## Verifying EDGAR's acceptance time zone
 
 `acceptanceDateTime` carries a trailing `Z`, but Metrix reads it as New York wall time
