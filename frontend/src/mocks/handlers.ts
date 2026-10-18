@@ -35,7 +35,7 @@ const watchlists: Watchlist[] = [];
 
 function coldDetail() {
   const base = tickerDetail("KITE")!;
-  return { ...base, ticker: { ...base.ticker, symbol: "COLD", company_name: "Coldwater Logistics (sample)" } };
+  return { ...base, ticker: { ...base.ticker, symbol: "COLD", company_name: "Coldwater Logistics (sample)", sector: "Industrials", industry: "Integrated Freight & Logistics" } };
 }
 
 export function resetMocks() {

@@ -97,7 +97,7 @@ const SOURCES = ["Example Wire", "Market Desk", "Sample Business Daily", "Demo F
 function headline(company: Company, ret: number, part: "market" | "sector" | "company", k: number): { title: string; rationale: string; tier: "easy" | "medium" | "hard" } {
   const short = company.name.replace(" (sample)", "");
   if (part === "market") return { title: `Stocks ${ret < 0 ? "slide" : "rally"} as rate expectations shift`, rationale: `A market-wide ${ret < 0 ? "sell-off" : "rally"} moved most stocks that session.`, tier: "hard" };
-  if (part === "sector") return { title: `${company.industry} stocks ${ret < 0 ? "fall" : "climb"} on an industry ${ret < 0 ? "pricing" : "demand"} report`, rationale: `Industry-wide news moved ${short}'s peers the same way.`, tier: "medium" };
+  if (part === "sector") return { title: `${company.industry} stocks ${ret < 0 ? "fall" : "climb"} on an industry ${ret < 0 ? "pricing" : "demand"} report`, rationale: `Industry-wide news moved ${short.endsWith("s") ? `${short}'` : `${short}'s`} peers the same way.`, tier: "medium" };
   const up = ret > 0;
   const variants = up
     ? [`${short} beats on revenue and raises its outlook`, `${short} wins a multi-year supply contract`]
@@ -243,7 +243,7 @@ export function chatAnswer(question: string, conversationId: string): ChatRespon
   const label = `M${top.id}`;
   const answer = `${company.symbol} ${top.daily_return < 0 ? "fell" : "rose"} ${Math.abs(top.daily_return * 100).toFixed(1)}% on ${top.date} [${label}]. `
     + `Most of it was company-specific: the breakdown puts ${(Math.abs(top.decomposition?.abnormal ?? 0) * 100).toFixed(1)} points on the company itself`
-    + (article ? `, after ${(article.article.title ?? "the news").toLowerCase()} [A${article.article.id}].` : ".")
+    + (article ? `, after the report "${article.article.title ?? "the news"}" [A${article.article.id}].` : ".")
     + `\n\n| Part | Points |\n|---|---|\n| Market | ${((top.decomposition?.market ?? 0) * 100).toFixed(1)} |\n| Company | ${((top.decomposition?.abnormal ?? 0) * 100).toFixed(1)} |`;
   return {
     conversation_id: conversationId, ticker: company.symbol, answer, grounded: true, answered_by: "model", citations_removed: 0,
