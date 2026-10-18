@@ -54,6 +54,11 @@ jobs:
       - run: pip install -r requirements.txt -r requirements-dev.txt
       - run: ruff check .
       - run: pytest
+      - name: Relevance evaluation (replayed, no network or keys)
+        # Recomputes every metric from recorded model answers and fails on a
+        # drop beyond the tolerance in evals/baseline.json. Passes, saying so,
+        # while there are no human or auto labels yet. See docs/EVALUATION.md.
+        run: python -m evals.run --replay --gate
 
   migrations:
     name: migrations

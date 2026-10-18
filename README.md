@@ -926,5 +926,7 @@ TEST_REDIS_URL=redis://localhost:6380/15 pytest
   process limits itself to rate / `EXPECTED_PROCESSES`, which is right only if that
   setting matches the number of processes; see [docs/FAIRNESS.md](docs/FAIRNESS.md).
 - **Tickers outside the pre-warm universe are still cold** on their first request.
-- **Relevance is unevaluated.** There is no labelled set, so "the scoring is good" is
-  an assertion, not a measurement. See `SUBMISSION.md`.
+- **Relevance is unevaluated so far.** The evaluation harness exists (snapshots,
+  labels, metrics with bootstrap intervals, replay, a CI gate), but the labelled set is
+  still empty, so "the scoring is good" is not yet a measurement. See
+  [docs/EVALUATION.md](docs/EVALUATION.md).

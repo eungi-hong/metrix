@@ -3,6 +3,18 @@
 One entry per phase, newest first. Each phase ships on its own branch
 (`v2/<phase>-<slug>`) and pull request.
 
+## Phase 2: evaluation harness (`v2/2-eval-harness`)
+
+- `app/services/edgar.py`: SEC EDGAR ticker-to-CIK and filings, fair access (User-Agent,
+  rate bucket, SEC hosts only, cache), 8-K items as events. Tested on synthetic
+  fixtures; not yet wired into ingestion.
+- `evals/`: snapshots rebuilt from the news cache, labels (`human`, `auto`,
+  `proposed`), metrics with bootstrap intervals, recorded replay, a budgeted live mode
+  through the spend ledger, a CI gate, and a coverage report.
+- `scripts/label_movements.py`: the terminal labelling tool.
+- `docs/EVALUATION.md`. No labels or numbers yet: the set needs production data and a
+  person.
+
 ## Phase 1: finance core (`v2/1-finance-core`)
 
 Additive; no default changes what is stored or spent.
