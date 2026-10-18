@@ -6,7 +6,9 @@ all this application needs:
 * `parse_structured` -- a schema-constrained extraction, used for competitor
   resolution and relevance scoring. Structured outputs mean the pipeline never
   has to regex JSON out of prose.
-* `complete` -- a plain multi-turn completion, used by the chat endpoint.
+* `complete` -- a plain multi-turn completion.
+* `tool_turn` -- one assistant turn that may call tools, streaming its text
+  as it is generated. Ask Metrix runs these in a bounded loop.
 
 Both take `operation`, what the call is for ("relevance", "peers", "chat"),
 which the spend ledger records. It is required, so a new call site cannot
@@ -20,6 +22,8 @@ out of the ingestion code.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
 from pydantic import BaseModel
@@ -30,6 +34,43 @@ T = TypeVar("T", bound=BaseModel)
 # plain dict -- every provider accepts this shape, and typing it to one SDK's
 # param class would put the vendor back in the callers' imports.
 MessageParam = dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class ToolSpec:
+    """A tool the model may call: a name, what it does, and a JSON Schema."""
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class ToolCall:
+    id: str
+    name: str
+    arguments: dict[str, Any]
+    # Set when the model's arguments were not valid JSON; the call is answered
+    # with an error rather than run.
+    error: str | None = None
+
+
+@dataclass(slots=True)
+class ToolTurn:
+    """One assistant turn: its text, and the tools it asked for (if any)."""
+
+    text: str
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+# A provider-neutral transcript for tool use. Items are dicts:
+#   {"role": "user", "content": str}
+#   {"role": "assistant", "content": str, "tool_calls": [ToolCall, ...]}
+#   {"role": "tool", "tool_call_id": str, "name": str, "content": str}
+# Each provider converts it to its own wire shape.
+TextCallback = Callable[[str], Awaitable[None]]
 
 
 class LLMProvider(ABC):
@@ -73,6 +114,26 @@ class LLMProvider(ABC):
         max_tokens: int | None = None,
     ) -> str:
         """Return the assistant's reply as plain text."""
+
+    async def tool_turn(
+        self,
+        *,
+        system: str,
+        messages: list[MessageParam],
+        tools: list[ToolSpec],
+        operation: str,
+        max_tokens: int | None = None,
+        on_text: TextCallback | None = None,
+    ) -> ToolTurn:
+        """One assistant turn with `tools` available (none: answer only).
+
+        Text is passed to `on_text` as it streams, when given. Metered and
+        rate limited like every other call, so the spend cap is checked before
+        it is made. A provider without tool support raises LLMError.
+        """
+        from app.core.errors import LLMError
+
+        raise LLMError(self.name, "this provider does not support tool use")
 
     async def aclose(self) -> None:  # pragma: no cover - default no-op
         """Release any held connections."""
