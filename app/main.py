@@ -8,8 +8,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.errors import register_exception_handlers
-from app.api.middleware import InteractiveAttributionMiddleware
-from app.api.routes import admin, chat, conversations, health, jobs, tickers
+from app.api.middleware import InteractiveAttributionMiddleware, RequestContextMiddleware
+from app.api.routes import admin, chat, conversations, health, jobs, metrics, tickers
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
 from app.core.redis import close_redis
@@ -72,10 +72,14 @@ def create_app() -> FastAPI:
                 "Content-Type",
                 "X-Exa-Api-Key",
                 "X-OpenAI-Api-Key",
+                "X-Request-ID",
             ],
+            expose_headers=["ETag", "X-Request-ID"],
             max_age=600,
         )
     app.add_middleware(InteractiveAttributionMiddleware)
+    # Outermost, so the id and the latency cover everything, CORS included.
+    app.add_middleware(RequestContextMiddleware)
     register_exception_handlers(app)
     app.include_router(health.router)
     app.include_router(tickers.router)
@@ -83,6 +87,7 @@ def create_app() -> FastAPI:
     app.include_router(conversations.router)
     app.include_router(jobs.router)
     app.include_router(admin.router)
+    app.include_router(metrics.router)
     return app
 
 

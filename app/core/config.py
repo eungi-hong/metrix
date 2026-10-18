@@ -429,6 +429,11 @@ class Settings(BaseSettings):
         description="Required in the X-Admin-Token header by /admin endpoints, "
         "which are disabled while it is unset.",
     )
+    metrics_token: str | None = Field(
+        default=None,
+        description="Bearer token (or X-Metrics-Token) for GET /metrics, which is "
+        "disabled (404) while it is unset.",
+    )
 
     # -------------------------------------------------------- rate limits
     # Account-wide: shared through Redis by the API and every worker.
