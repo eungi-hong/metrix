@@ -429,6 +429,21 @@ class Settings(BaseSettings):
         description="Required in the X-Admin-Token header by /admin endpoints, "
         "which are disabled while it is unset.",
     )
+    response_cache_enabled: bool = Field(
+        default=True,
+        description="Keep built GET /tickers/{symbol} responses in Redis, keyed by their "
+        "ETag. A no-op without Redis.",
+    )
+    response_cache_ttl_seconds: int = Field(default=300, ge=1, le=86_400)
+    response_cache_max_bytes: int = Field(
+        default=2_000_000, ge=1_000, description="Larger responses are not cached."
+    )
+    http_cache_max_age_seconds: int = Field(
+        default=60, ge=0, description="Cache-Control max-age on settled ticker responses."
+    )
+    http_cache_stale_seconds: int = Field(
+        default=300, ge=0, description="Cache-Control stale-while-revalidate on settled ticker responses."
+    )
     metrics_token: str | None = Field(
         default=None,
         description="Bearer token (or X-Metrics-Token) for GET /metrics, which is "

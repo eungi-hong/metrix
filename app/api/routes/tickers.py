@@ -21,11 +21,12 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 
 import sqlalchemy as sa
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.deps import CurrentUser, LLMDep, NewsDep, ProviderCredentialsDep, SessionDep
+from app.core import metrics
 from app.core.config import settings
 from app.core.context import CallClass
 from app.core.errors import (
@@ -67,7 +68,16 @@ from app.schemas.market import (
     TriggerOut,
     VolumeAnalysisOut,
 )
-from app.services import benchmarks, demand, ingestion, queue, quotas, spend, symbol_directory
+from app.services import (
+    benchmarks,
+    demand,
+    ingestion,
+    queue,
+    quotas,
+    response_cache,
+    spend,
+    symbol_directory,
+)
 from app.services.auth import Principal
 from app.services.limits import LimitResult
 from app.services.llm import LLMProvider
@@ -82,9 +92,11 @@ router = APIRouter(tags=["tickers"])
     "/tickers/{symbol}",
     response_model=TickerDetailOut,
     summary="Stock movements for a ticker, each with the news that explains it",
+    responses={304: {"description": "Not modified: the `If-None-Match` ETag is current."}},
 )
 async def get_ticker_detail(
     symbol: str,
+    request: Request,
     session: SessionDep,
     llm: LLMDep,
     news_provider: NewsDep,
@@ -212,6 +224,34 @@ async def get_ticker_detail(
         response.status_code = 202
         return _empty_response(symbol, state, ensured.message, ensured.job_id)
 
+    # Settled data (not mid-ingest, not failed, not bought with the caller's
+    # own keys) is validated with an ETag and cached by it; see
+    # app.services.response_cache.
+    etag: str | None = None
+    if state in ("ready", "refreshing") and not provider_credentials.supplied_by_user:
+        etag = response_cache.etag_for(
+            {
+                "symbol": symbol,
+                "versions": await _data_versions(session, ticker, include_benchmarks),
+                "params": sorted(request.query_params.multi_items()),
+                "state": state,
+                "message": ensured.message,
+                "job_id": ensured.job_id,
+                "warnings": ensured.warnings,
+            }
+        )
+        headers = {
+            "ETag": etag,
+            "Cache-Control": response_cache.cache_control(state),
+            "Vary": "Authorization",
+        }
+        if response_cache.matches(request.headers.get("if-none-match"), etag):
+            metrics.CACHE_REQUESTS.labels("ticker", "not_modified").inc()
+            return Response(status_code=304, headers=headers)
+        cached = await response_cache.get(etag)
+        if cached is not None:
+            return Response(content=cached, media_type="application/json", headers=headers)
+
     conditions: list[sa.ColumnElement[bool]] = [Movement.ticker_id == ticker.id]
     if not include_unqualified:
         conditions.append(Movement.qualifies.is_(True))
@@ -264,7 +304,7 @@ async def get_ticker_detail(
         # problem, not an empty-but-valid result.
         response.status_code = 502
 
-    return TickerDetailOut(
+    detail = TickerDetailOut(
         status=state,
         message=ensured.message,
         job_id=ensured.job_id,
@@ -296,6 +336,24 @@ async def get_ticker_detail(
             await _benchmark_series(session, ticker, start, end) if include_benchmarks else None
         ),
     )
+    if etag is not None and response.status_code in (None, 200):
+        body = detail.model_dump_json().encode()
+        await response_cache.put(etag, body)
+        return Response(content=body, media_type="application/json", headers=headers)
+    return detail
+
+
+async def _data_versions(session: AsyncSession, ticker: Ticker, include_benchmarks: bool) -> list[int]:
+    """The ticker's data version, read fresh (the loaded row may predate a
+    commit in this request), and its benchmarks' when they are shown."""
+    symbols = [ticker.symbol]
+    if include_benchmarks:
+        choice = benchmarks.choose(ticker.sector, ticker.industry)
+        symbols += [s for s in (choice.market, choice.sector) if s]
+    rows = dict(
+        (await session.execute(sa.select(Ticker.symbol, Ticker.data_version).where(Ticker.symbol.in_(symbols)))).all()
+    )
+    return [rows.get(s, -1) for s in symbols]
 
 
 async def _count_demand(session: AsyncSession, symbol: str, principal: Principal) -> None:

@@ -60,6 +60,11 @@ class Ticker(Base, TimestampMixin):
     )
     # SEC Central Index Key, looked up once when EDGAR is enabled.
     cik: Mapped[int | None] = mapped_column(sa.Integer)
+    # Incremented by every committed write that changes what the API shows for
+    # this ticker (app.db.versions); keys the read path's ETag and cache.
+    data_version: Mapped[int] = mapped_column(
+        sa.BigInteger, default=0, server_default="0", nullable=False
+    )
 
     prices: Mapped[list["PriceBar"]] = relationship(
         back_populates="ticker", cascade="all, delete-orphan", lazy="noload"

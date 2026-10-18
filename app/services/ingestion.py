@@ -86,6 +86,7 @@ from app.core.errors import (
 from app.core.logging import get_logger
 from app.models.enums import IngestStatus, NewsStatus
 from app.models.jobs import JobKind, JobSource
+from app.db import versions
 from app.models.filings import MovementFiling
 from app.models.market import PRICE_DECIMALS, Movement, PriceBar, Ticker
 from app.models.news import MovementNewsLink, NewsArticle, url_fingerprint
@@ -263,6 +264,8 @@ async def claim_ingestion(session: AsyncSession, ticker: Ticker) -> bool:
             ingest_status=IngestStatus.RUNNING,
             ingest_started_at=datetime.now(timezone.utc),
             ingest_error=None,
+            # A bulk UPDATE bypasses the flush hook (app.db.versions).
+            data_version=Ticker.data_version + 1,
         )
         # Let the database evaluate the predicate. With the default the ORM
         # re-evaluates it in Python against loaded objects, which cannot
@@ -870,6 +873,7 @@ async def _supersede_links(
         .values(superseded_at=_now())
         .execution_options(synchronize_session=False)
     )
+    versions.note(session.sync_session, [movement.ticker_id])
 
 
 def _record_failure(
