@@ -54,8 +54,10 @@ The API is on <http://localhost:8000>, interactive docs at <http://localhost:800
 
 ### Frontend workspace
 
-The React research workspace lives in [`frontend/`](frontend). It is a separate Vite
-application, so it does not alter the FastAPI routes or the backend's source of truth.
+The web app lives in [`frontend/`](frontend): React, TypeScript and Vite, typed
+against the API's OpenAPI document. Every view has a URL (`/t/NVDA`,
+`/t/NVDA/m/2026-06-05`, `/ask`, `/pulse`, `/watchlist`, `/methodology`), research
+progress arrives live over `GET /events`, and answers stream from `POST /chat/stream`.
 
 ```bash
 # in a second terminal, from the repository root
@@ -63,21 +65,26 @@ cp frontend/.env.example frontend/.env
 # set CORS_ALLOWED_ORIGINS=http://localhost:5173 in the root .env for local browser access
 cd frontend
 npm install
-npm run dev
+npm run dev                 # against the API on :8000
+VITE_MSW=1 npm run dev      # or against a mocked API with fictional sample data
 ```
 
-Open <http://localhost:5173>. Choose **Use demo access** to use the capped server-side
-Exa and OpenAI keys, or enter your own pair in the connection control. Browser-supplied
-keys are sent only with the current request, are never saved by Metrix or a background
-job, and are only retained in `sessionStorage` if you explicitly opt in. The initial
-screen also offers **View demo data**, which is clearly labelled local fixture data
-rather than API data. For a production check, run `npm run typecheck`, `npm run lint`,
-`npm test`, and `npm run build` from `frontend/`.
+Open <http://localhost:5173>. Press `/` or `Ctrl+K` to search and `?` for every
+shortcut. Requests use the server's capped demo access unless you enter your own Exa
+and OpenAI keys under settings; those are sent only with your requests, never saved by
+Metrix, and kept in this tab's `sessionStorage` only if you tick "Remember until this tab closes". With
+`VITE_MSW=1` a banner on every page says the data is sample data.
+
+Checks, all from `frontend/`: `npm run lint`, `npm run typecheck`, `npm test` (Vitest),
+`npm run build`, and `npm run e2e` (Playwright against the production bundle with the
+mocked API: user flows, no horizontal overflow at 390 px, axe in dark mode; it needs
+Chromium, `npx playwright install chromium` once). `npm run screenshots` retakes
+[`docs/assets/after/`](docs/assets/after).
 
 `CORS_ALLOWED_ORIGINS` is an optional, comma-separated FastAPI allow-list. It is empty
 by default (same-origin only); setting only `http://localhost:5173` permits the local
-Vite app's `GET /tickers`, `GET /jobs`, and `POST /chat` calls without enabling a
-wildcard origin.
+Vite app's calls (including the watchlist `PUT` and `DELETE`, and the rate-limit
+headers it reads) without enabling a wildcard origin.
 
 > The `curl` examples below print raw JSON. For the same data as a readable tree,
 > skip to [Reading it in a terminal](#reading-it-in-a-terminal).

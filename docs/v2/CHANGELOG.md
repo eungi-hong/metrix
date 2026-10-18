@@ -3,6 +3,37 @@
 One entry per phase, newest first. Each phase ships on its own branch
 (`v2/<phase>-<slug>`) and pull request.
 
+## Phase 6: the web app, rebuilt (`v2/6-frontend`)
+
+- Every view has a URL: home, `/t/:symbol` (chart, moves table, selected move),
+  `/t/:symbol/m/:date` (the case file), `/ask`, `/pulse`, `/watchlist`,
+  `/methodology`. Lazy routes; the table's filters live in the query string.
+- A design system from `scratchpad/design/RESEARCH.md`: CSS-variable tokens for
+  light and dark, Inter, tabular numbers, one driver palette (market, sector,
+  company) used everywhere; a command palette (`/`, `Ctrl+K`), keyboard
+  shortcuts (`?`), a phone tab bar.
+- The case file: return decomposition bars, "when the news broke" on the
+  session timeline, the primary filing, evidence strongest first, why it was
+  flagged, peers and benchmarks that session.
+- Ask Metrix streams (`POST /chat/stream`), shows which tools it used, and turns
+  `[M12]`-style labels into links to the case files they cite.
+- Live research progress over `GET /events`; every evidence status worded for
+  people; errors and limits explained in plain words (never a quota's internal
+  name), with the request id under "Details".
+- Charts: lightweight-charts 5.2.1 (Apache-2.0, attribution kept), markers coloured
+  by driver, SPY and sector overlays rebased to 100.
+- Backend, for the app: `X-RateLimit-Scope` on 429s (and CORS exposes the
+  rate-limit headers); ingestion progress has a "detected" stage with session and
+  movement counts; the case file carries its session frame; `ApiModel` makes
+  defaulted response fields required in the OpenAPI document, so generated types
+  are exact.
+- Tests: 34 Vitest unit tests; 19 Playwright end-to-end tests (flows, no
+  overflow at 390 px on seven pages, axe in dark mode) in CI. Lighthouse
+  (desktop, production bundle, mocked API): performance 97 to 99, accessibility
+  100.
+- Screenshots at 1440, 768 and 390 px in `docs/assets/after/`, from fictional
+  sample data (`npm run screenshots`).
+
 ## Phase 5: Ask Metrix 2.0 (`v2/5-ask-metrix`)
 
 - A bounded tool loop: six read-only database tools (movements, the case file,
