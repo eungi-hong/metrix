@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -66,14 +66,31 @@ class ChatSources(BaseModel):
     filings: list[FilingSource] = Field(default_factory=list)
 
 
+class ToolCallOut(BaseModel):
+    """A database lookup the model made while answering."""
+
+    name: str
+    arguments: dict[str, Any]
+    summary: str
+
+
 class ChatResponse(BaseModel):
     conversation_id: str
-    ticker: str | None
+    ticker: str | None = Field(description="The main ticker the answer is about, if any.")
     answer: str
     sources: ChatSources
     grounded: bool = Field(
-        description="False when no stored movements matched, in which case the "
-        "answer says so rather than speculating."
+        description="True when the answer cites stored evidence (a movement, article or filing "
+        "label that a lookup returned); false otherwise, in which case it says what it could not find."
+    )
+    answered_by: Literal["model", "fallback"] = Field(
+        default="model",
+        description="'fallback': the model was unavailable or over the spend cap, and the answer is a "
+        "summary assembled from the database, not written by a model.",
+    )
+    tool_calls: list[ToolCallOut] = Field(default_factory=list)
+    suggestions: list[str] = Field(
+        default_factory=list, description="Follow-up questions built from the data (not by a model)."
     )
 
 

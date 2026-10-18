@@ -106,6 +106,9 @@ class FailingLLM(StubLLM):
     async def complete(self, **kwargs):
         raise self.error
 
+    async def tool_turn(self, **kwargs):
+        raise self.error
+
 
 async def test_chat_has_its_own_daily_quota(session_factory, monkeypatch):
     plan(monkeypatch, chat_per_day=2)
@@ -129,17 +132,20 @@ async def test_chat_per_minute_refuses_bursts(session_factory, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    ("error", "status"),
+    "error",
     [
-        (LLMError("anthropic", "overloaded"), 502),
-        (SpendCapReached("interactive", datetime.now(timezone.utc) + timedelta(hours=1), "cap"), 503),
+        LLMError("anthropic", "overloaded"),
+        SpendCapReached("interactive", datetime.now(timezone.utc) + timedelta(hours=1), "cap"),
     ],
 )
-async def test_a_turn_that_fails_on_our_side_gives_its_quota_back(session_factory, monkeypatch, error, status):
+async def test_a_turn_that_fails_on_our_side_gives_its_quota_back(session_factory, monkeypatch, error):
+    # Changed in v2 Phase 5: the turn is answered from the database (200,
+    # answered_by "fallback") instead of 502/503, and still costs no quota.
     plan(monkeypatch, chat_per_day=1, chat_per_minute=1)
     _, key = await new_api_key(session_factory, plan=Plan.FREE)
     async with api_client(api_app(session_factory, FailingLLM(error)), key) as failing:
-        assert (await failing.post("/chat", json={"question": "Q?"})).status_code == status
+        response = await failing.post("/chat", json={"question": "Q?"})
+        assert response.status_code == 200 and response.json()["answered_by"] == "fallback"
     async with api_client(api_app(session_factory, StubLLM()), key) as working:
         assert (await working.post("/chat", json={"question": "Q?"})).status_code == 200
 

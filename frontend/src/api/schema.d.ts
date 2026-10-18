@@ -189,10 +189,16 @@ export interface paths {
          *     explicitly, inferred from the question, or carried over from the
          *     conversation.
          *
+         *     The model answers by looking things up in the database with tools, and
+         *     every citation in the answer is checked against what those lookups
+         *     returned. When the model is down, too busy or over the daily spend cap,
+         *     the answer is a summary assembled from the database instead
+         *     (`answered_by: "fallback"`), still 200.
+         *
          *     Each turn counts against `chat_per_minute` and `chat_per_day`, and is
-         *     given back if the answer fails on our side (the model is down or too busy,
-         *     or the daily spend cap is reached). A turn made with the caller's own
-         *     provider keys counts against neither: it spends nothing of ours.
+         *     given back when the answer did not use the model. A turn made with the
+         *     caller's own provider keys counts against neither: it spends nothing of
+         *     ours.
          */
         post: operations["chat_chat_post"];
         delete?: never;
@@ -577,13 +583,13 @@ export interface components {
             published_at: string | null;
             /**
              * Ref
-             * @description Citation label used in the answer, e.g. 'A3'.
+             * @description Citation label used in the answer: A and the article id, e.g. 'A1033'.
              */
             ref: string;
             /** Relevance Score */
-            relevance_score: number;
+            relevance_score?: number | null;
             /** Relevance Tier */
-            relevance_tier: string;
+            relevance_tier?: string | null;
             /** Source */
             source: string | null;
             /** Title */
@@ -657,21 +663,43 @@ export interface components {
         ChatResponse: {
             /** Answer */
             answer: string;
+            /**
+             * Answered By
+             * @description 'fallback': the model was unavailable or over the spend cap, and the answer is a summary assembled from the database, not written by a model.
+             * @default model
+             * @enum {string}
+             */
+            answered_by: "model" | "fallback";
             /** Conversation Id */
             conversation_id: string;
             /**
              * Grounded
-             * @description False when no stored movements matched, in which case the answer says so rather than speculating.
+             * @description True when the answer cites stored evidence (a movement, article or filing label that a lookup returned); false otherwise, in which case it says what it could not find.
              */
             grounded: boolean;
             sources: components["schemas"]["ChatSources"];
-            /** Ticker */
+            /**
+             * Suggestions
+             * @description Follow-up questions built from the data (not by a model).
+             */
+            suggestions?: string[];
+            /**
+             * Ticker
+             * @description The main ticker the answer is about, if any.
+             */
             ticker: string | null;
+            /** Tool Calls */
+            tool_calls?: components["schemas"]["ToolCallOut"][];
         };
-        /** ChatSources */
+        /**
+         * ChatSources
+         * @description Only what the answer actually cites.
+         */
         ChatSources: {
             /** Articles */
             articles?: components["schemas"]["ArticleSource"][];
+            /** Filings */
+            filings?: components["schemas"]["FilingSource"][];
             /** Movements */
             movements?: components["schemas"]["MovementSource"][];
         };
@@ -1002,6 +1030,28 @@ export interface components {
             timing?: ("before_prior_close" | "overnight" | "intraday" | "after_close" | "later") | null;
             /** Timing Precision */
             timing_precision?: ("time" | "day") | null;
+            /** Url */
+            url?: string | null;
+        };
+        /** FilingSource */
+        FilingSource: {
+            /** Accepted At */
+            accepted_at?: string | null;
+            /** Accession */
+            accession: string;
+            /** Filing Id */
+            filing_id: number;
+            /** Form */
+            form: string;
+            /** Items */
+            items?: string[];
+            /**
+             * Ref
+             * @description Citation label used in the answer: F and the filing id, e.g. 'F7'.
+             */
+            ref: string;
+            /** Symbol */
+            symbol?: string | null;
             /** Url */
             url?: string | null;
         };
@@ -1379,7 +1429,7 @@ export interface components {
         };
         /**
          * MovementSource
-         * @description A movement that was injected into the prompt, with its citation label.
+         * @description A movement the answer cites, with its citation label.
          */
         MovementSource: {
             /** Daily Return Pct */
@@ -1395,9 +1445,11 @@ export interface components {
             movement_id: number;
             /**
              * Ref
-             * @description Citation label used in the answer, e.g. 'M1'.
+             * @description Citation label used in the answer: M and the movement id, e.g. 'M412'.
              */
             ref: string;
+            /** Symbol */
+            symbol?: string | null;
         };
         /**
          * NewsStatus
@@ -1825,6 +1877,18 @@ export interface components {
             sector: string | null;
             /** Symbol */
             symbol: string;
+        };
+        /**
+         * ToolCallOut
+         * @description A database lookup the model made while answering.
+         */
+        ToolCallOut: {
+            /** Arguments */
+            arguments: Record<string, never>;
+            /** Name */
+            name: string;
+            /** Summary */
+            summary: string;
         };
         /**
          * UsageSummary

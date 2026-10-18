@@ -294,17 +294,31 @@
             "title": "Published At"
           },
           "ref": {
-            "description": "Citation label used in the answer, e.g. 'A3'.",
+            "description": "Citation label used in the answer: A and the article id, e.g. 'A1033'.",
             "title": "Ref",
             "type": "string"
           },
           "relevance_score": {
-            "title": "Relevance Score",
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relevance Score"
           },
           "relevance_tier": {
-            "title": "Relevance Tier",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relevance Tier"
           },
           "source": {
             "anyOf": [
@@ -339,9 +353,7 @@
           "title",
           "url",
           "source",
-          "published_at",
-          "relevance_tier",
-          "relevance_score"
+          "published_at"
         ],
         "title": "ArticleSource",
         "type": "object"
@@ -503,17 +515,35 @@
             "title": "Answer",
             "type": "string"
           },
+          "answered_by": {
+            "default": "model",
+            "description": "'fallback': the model was unavailable or over the spend cap, and the answer is a summary assembled from the database, not written by a model.",
+            "enum": [
+              "model",
+              "fallback"
+            ],
+            "title": "Answered By",
+            "type": "string"
+          },
           "conversation_id": {
             "title": "Conversation Id",
             "type": "string"
           },
           "grounded": {
-            "description": "False when no stored movements matched, in which case the answer says so rather than speculating.",
+            "description": "True when the answer cites stored evidence (a movement, article or filing label that a lookup returned); false otherwise, in which case it says what it could not find.",
             "title": "Grounded",
             "type": "boolean"
           },
           "sources": {
             "$ref": "#/components/schemas/ChatSources"
+          },
+          "suggestions": {
+            "description": "Follow-up questions built from the data (not by a model).",
+            "items": {
+              "type": "string"
+            },
+            "title": "Suggestions",
+            "type": "array"
           },
           "ticker": {
             "anyOf": [
@@ -524,7 +554,15 @@
                 "type": "null"
               }
             ],
+            "description": "The main ticker the answer is about, if any.",
             "title": "Ticker"
+          },
+          "tool_calls": {
+            "items": {
+              "$ref": "#/components/schemas/ToolCallOut"
+            },
+            "title": "Tool Calls",
+            "type": "array"
           }
         },
         "required": [
@@ -538,12 +576,20 @@
         "type": "object"
       },
       "ChatSources": {
+        "description": "Only what the answer actually cites.",
         "properties": {
           "articles": {
             "items": {
               "$ref": "#/components/schemas/ArticleSource"
             },
             "title": "Articles",
+            "type": "array"
+          },
+          "filings": {
+            "items": {
+              "$ref": "#/components/schemas/FilingSource"
+            },
+            "title": "Filings",
             "type": "array"
           },
           "movements": {
@@ -1436,6 +1482,76 @@
           "form"
         ],
         "title": "FilingOut",
+        "type": "object"
+      },
+      "FilingSource": {
+        "properties": {
+          "accepted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accepted At"
+          },
+          "accession": {
+            "title": "Accession",
+            "type": "string"
+          },
+          "filing_id": {
+            "title": "Filing Id",
+            "type": "integer"
+          },
+          "form": {
+            "title": "Form",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "ref": {
+            "description": "Citation label used in the answer: F and the filing id, e.g. 'F7'.",
+            "title": "Ref",
+            "type": "string"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          }
+        },
+        "required": [
+          "ref",
+          "filing_id",
+          "accession",
+          "form"
+        ],
+        "title": "FilingSource",
         "type": "object"
       },
       "HTTPValidationError": {
@@ -2350,7 +2466,7 @@
         "type": "object"
       },
       "MovementSource": {
-        "description": "A movement that was injected into the prompt, with its citation label.",
+        "description": "A movement the answer cites, with its citation label.",
         "properties": {
           "daily_return_pct": {
             "title": "Daily Return Pct",
@@ -2370,9 +2486,20 @@
             "type": "integer"
           },
           "ref": {
-            "description": "Citation label used in the answer, e.g. 'M1'.",
+            "description": "Citation label used in the answer: M and the movement id, e.g. 'M412'.",
             "title": "Ref",
             "type": "string"
+          },
+          "symbol": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Symbol"
           }
         },
         "required": [
@@ -3516,6 +3643,30 @@
         "title": "TickerOut",
         "type": "object"
       },
+      "ToolCallOut": {
+        "description": "A database lookup the model made while answering.",
+        "properties": {
+          "arguments": {
+            "title": "Arguments",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "arguments",
+          "summary"
+        ],
+        "title": "ToolCallOut",
+        "type": "object"
+      },
       "UsageSummary": {
         "description": "One UTC day's spend. Ledger figures are settled calls only; calls in\nflight show under `reserved_usd`.",
         "properties": {
@@ -4492,7 +4643,7 @@
     },
     "/chat": {
       "post": {
-        "description": "Answer `question` from stored movements and linked news.\n\nPass `conversation_id` from a previous response to continue a conversation;\nomit it to start one. Only your own conversations can be continued: any\nother id, including one that exists, is a 404. The ticker may be given\nexplicitly, inferred from the question, or carried over from the\nconversation.\n\nEach turn counts against `chat_per_minute` and `chat_per_day`, and is\ngiven back if the answer fails on our side (the model is down or too busy,\nor the daily spend cap is reached). A turn made with the caller's own\nprovider keys counts against neither: it spends nothing of ours.",
+        "description": "Answer `question` from stored movements and linked news.\n\nPass `conversation_id` from a previous response to continue a conversation;\nomit it to start one. Only your own conversations can be continued: any\nother id, including one that exists, is a 404. The ticker may be given\nexplicitly, inferred from the question, or carried over from the\nconversation.\n\nThe model answers by looking things up in the database with tools, and\nevery citation in the answer is checked against what those lookups\nreturned. When the model is down, too busy or over the daily spend cap,\nthe answer is a summary assembled from the database instead\n(`answered_by: \"fallback\"`), still 200.\n\nEach turn counts against `chat_per_minute` and `chat_per_day`, and is\ngiven back when the answer did not use the model. A turn made with the\ncaller's own provider keys counts against neither: it spends nothing of\nours.",
         "operationId": "chat_chat_post",
         "parameters": [
           {

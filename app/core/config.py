@@ -801,16 +801,22 @@ class Settings(BaseSettings):
     )
 
     # ------------------------------------------------------------------ chat
-    chat_max_movements_in_context: int = Field(default=12, ge=1)
-    chat_max_articles_per_movement: int = Field(default=4, ge=1)
-    chat_max_history_messages: int = Field(default=20, ge=2)
-    chat_max_movement_summaries: int = Field(
-        default=60,
-        ge=1,
-        description="One-line movement summaries placed in the prompt. Cheap "
-        "enough to include every movement, so date-specific questions can be "
-        "answered even when that day is not among the most significant.",
+    chat_max_tool_calls: int = Field(
+        default=5, ge=0, le=10, description="Tool calls Ask Metrix may make per question."
     )
+    chat_turn_token_budget: int = Field(
+        default=40_000,
+        ge=2_000,
+        description="Input plus output tokens one question may use across its model calls. "
+        "Past it, the model answers with what it has, without more tools.",
+    )
+    chat_history_token_budget: int = Field(
+        default=3_000,
+        ge=0,
+        description="Earlier questions and answers replayed into a turn, newest first, up to "
+        "about this many tokens (4 characters each).",
+    )
+    chat_max_output_tokens: int = Field(default=1_200, ge=100, description="Per model call.")
 
     @model_validator(mode="after")
     def _check_worker_settings(self) -> "Settings":

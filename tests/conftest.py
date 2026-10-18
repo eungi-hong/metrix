@@ -58,6 +58,8 @@ class StubLLM(LLMProvider):
         self.structured_calls: list[dict[str, Any]] = []
         self.complete_calls: list[dict[str, Any]] = []
         self.answer = "The move was driven by the reported earnings miss [M1] [A1]."
+        self.tool_answer = "The move was driven by the reported earnings miss [{M}] [{A}]."
+        self.tool_turn_calls: list[dict[str, Any]] = []
 
     @property
     def available(self) -> bool:
@@ -115,6 +117,36 @@ class StubLLM(LLMProvider):
     ) -> str:
         self.complete_calls.append({"system": system, "messages": messages})
         return self.answer
+
+    async def tool_turn(self, *, system: str, messages: list[dict[str, Any]], tools: list[Any],
+                        operation: str, max_tokens: int | None = None, on_text: Any = None) -> Any:
+        """Ask Metrix's loop, scripted: look up the ticker the question is
+        about, then answer citing the first movement and article the lookup
+        returned (`tool_answer`, with {M} and {A}), streaming it in pieces."""
+        import re as _re
+
+        from app.services.llm.base import ToolCall, ToolTurn
+
+        self.tool_turn_calls.append({"system": system, "messages": list(messages), "tools": [t.name for t in tools]})
+        last_user = max(i for i, m in enumerate(messages) if m["role"] == "user")
+        results = [m["content"] for m in messages[last_user + 1:] if m["role"] == "tool"]
+        if tools and not results:
+            symbol = _re.search(r"TICKERS: ([A-Z][A-Z.\-]*)", messages[last_user]["content"])
+            if symbol:
+                return ToolTurn(text="", tool_calls=[ToolCall("call_1", "get_movements",
+                                                              {"symbol": symbol.group(1), "sort": "abs_return"})],
+                                input_tokens=500, output_tokens=20)
+        labels = _re.findall(r'"label":"([MAF]\d+)"', "".join(results))
+        movement = next((label for label in labels if label.startswith("M")), None)
+        article = next((label for label in labels if label.startswith("A")), None)
+        if movement:
+            text = self.tool_answer.format(M=movement, A=article or movement)
+        else:
+            text = "No stored movements answer that question."
+        if on_text is not None:
+            for piece in (text[: len(text) // 2], text[len(text) // 2:]):
+                await on_text(piece)
+        return ToolTurn(text=text, input_tokens=800, output_tokens=40)
 
 
 def build_price_history(symbol: str = "TEST") -> PriceHistory:

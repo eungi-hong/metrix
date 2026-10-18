@@ -34,10 +34,16 @@ async def chat(
     explicitly, inferred from the question, or carried over from the
     conversation.
 
+    The model answers by looking things up in the database with tools, and
+    every citation in the answer is checked against what those lookups
+    returned. When the model is down, too busy or over the daily spend cap,
+    the answer is a summary assembled from the database instead
+    (`answered_by: "fallback"`), still 200.
+
     Each turn counts against `chat_per_minute` and `chat_per_day`, and is
-    given back if the answer fails on our side (the model is down or too busy,
-    or the daily spend cap is reached). A turn made with the caller's own
-    provider keys counts against neither: it spends nothing of ours.
+    given back when the answer did not use the model. A turn made with the
+    caller's own provider keys counts against neither: it spends nothing of
+    ours.
     """
     if not request.question.strip():
         raise HTTPException(status_code=422, detail="`question` must not be blank.")
@@ -50,13 +56,21 @@ async def chat(
             await quotas.refund(principal, Quota.CHAT_PER_MINUTE)
             raise
     try:
-        return await answer_question(session, request, llm, principal)
+        response = await answer_question(session, request, llm, principal)
     except ConversationNotFound:
         raise HTTPException(
             status_code=404, detail=f"No conversation with id {request.conversation_id}."
         ) from None
     except (UpstreamError, WorkDeferred):
-        if charged:
-            await quotas.refund(principal, Quota.CHAT_PER_MINUTE)
-            await quotas.refund(principal, Quota.CHAT_PER_DAY)
+        await refund_chat(principal, charged)
         raise
+    if response.answered_by == "fallback":
+        # Answered from the database without a model: nothing of ours was spent.
+        await refund_chat(principal, charged)
+    return response
+
+
+async def refund_chat(principal, charged: bool) -> None:
+    if charged:
+        await quotas.refund(principal, Quota.CHAT_PER_MINUTE)
+        await quotas.refund(principal, Quota.CHAT_PER_DAY)

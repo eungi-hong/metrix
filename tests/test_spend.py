@@ -616,22 +616,26 @@ class CappedChat(StubLLM):
     async def complete(self, **kwargs: Any) -> str:
         raise SpendCapReached("interactive", spend.next_reset(datetime.now(timezone.utc)), "Daily cap reached.")
 
+    async def tool_turn(self, **kwargs: Any) -> Any:
+        raise SpendCapReached("interactive", spend.next_reset(datetime.now(timezone.utc)), "Daily cap reached.")
+
     async def parse_structured(self, **kwargs: Any) -> Any:
         raise SpendCapReached("interactive", spend.next_reset(datetime.now(timezone.utc)), "Daily cap reached.")
 
 
-async def test_chat_over_the_cap_is_503_with_retry_after(capped_client, session_factory):
+async def test_chat_over_the_cap_answers_from_the_database(capped_client, session_factory):
+    # Changed in v2 Phase 5 (was a 503): over the cap, Ask Metrix answers with
+    # a summary from the database, marked as not model-written.
     from app.models.chat import ChatMessage
 
     async with capped_client as client:
         response = await client.post("/chat", json={"question": "Why did it move?"})
 
-    assert response.status_code == 503
-    assert response.json()["error"] == "spend_cap_reached"
-    retry_after = int(response.headers["retry-after"])
-    assert 0 < retry_after <= 24 * 3600
+    assert response.status_code == 200
+    body = response.json()
+    assert body["answered_by"] == "fallback" and "not written by a model" in body["answer"]
     async with session_factory() as session:
-        assert (await session.scalar(sa.select(sa.func.count()).select_from(ChatMessage))) == 0
+        assert (await session.scalar(sa.select(sa.func.count()).select_from(ChatMessage))) == 2
 
 
 async def test_a_capped_wait_request_still_serves_the_stored_data(capped_client):
@@ -666,10 +670,12 @@ async def test_queued_work_warns_once_users_are_being_refused(client, session_fa
 
 async def test_api_spend_is_attributed_to_the_user_as_interactive(session_factory, ledger, user_key):
     class MeteredChat(StubLLM):
-        async def complete(self, **kwargs: Any) -> str:
+        async def tool_turn(self, **kwargs: Any) -> Any:
+            from app.services.llm.base import ToolTurn
+
             async with spend.metered("anthropic", kwargs["operation"], Decimal("0.01")) as meter:
                 await meter.settle(cost_usd=Decimal("0.004"), estimated=False)
-            return "An answer."
+            return ToolTurn(text="An answer.")
 
     user, key = user_key
     async with api_client(api_app(session_factory, MeteredChat()), key) as client:
