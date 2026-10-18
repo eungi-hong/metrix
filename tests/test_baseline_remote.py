@@ -188,6 +188,27 @@ def test_chat_waits_out_one_rate_limit_and_times_only_the_answer(monkeypatch):
     assert timing.returned_but_not_cited == 0
 
 
+def test_an_html_error_page_from_a_proxy_is_reported_not_raised():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(502, text="<html><body>Bad gateway</body></html>")
+
+    with httpx.Client(base_url="https://api.test", transport=httpx.MockTransport(handler)) as client:
+        summary = remote.fetch_movements(client, "NVDA")
+
+    assert summary.http_status == 502
+    assert summary.movements_total == 0
+
+
+@pytest.mark.parametrize(("header", "seconds"), [("30", 30.0), (None, 0.0), ("soon", 0.0), ("-4", 0.0)])
+def test_retry_after_is_read_as_seconds_or_ignored(header, seconds):
+    assert remote.retry_after_seconds(header) == seconds
+
+
+def test_usage_needs_at_least_one_day():
+    with pytest.raises(SystemExit):
+        remote.main(["usage", "--base-url", "https://api.test", "--days", "0"])
+
+
 @pytest.mark.parametrize("questions", [remote.CHAT_QUESTIONS])
 def test_the_chat_questions_are_fixed_and_name_the_ticker(questions):
     assert len(questions) == 3

@@ -21,4 +21,4 @@ are measured against:
   `docs/assets/before/` (six states at 1440, 768 and 390 px, from the frontend's
   demo-fixture mode).
 - Tests for both measurement scripts (`tests/test_bench_read_path.py`,
-  `tests/test_baseline_remote.py`), offline: 575 to 598 backend tests.
+  `tests/test_baseline_remote.py`), offline: 575 to 604 backend tests.

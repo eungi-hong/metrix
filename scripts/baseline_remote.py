@@ -109,6 +109,34 @@ def write_json(path: Path | None, document: dict[str, Any]) -> None:
     print(f"wrote {path}")
 
 
+def json_body(response: httpx.Response) -> dict[str, Any]:
+    """The response's JSON object, or its text as `detail` when it is not JSON.
+
+    A proxy in front of the API can answer with an HTML error page; that
+    should be reported, not crash the measurement.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        return {"detail": response.text[:300]}
+    return body if isinstance(body, dict) else {"detail": str(body)[:300]}
+
+
+def retry_after_seconds(value: str | None) -> float:
+    """Retry-After in seconds; 0 when absent or not a number of seconds."""
+    try:
+        return max(float(value or 0), 0.0)
+    except ValueError:
+        return 0.0
+
+
+def positive_int(value: str) -> int:
+    number = int(value)
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return number
+
+
 # ---------------------------------------------------------------- movements
 
 
@@ -168,7 +196,7 @@ def fetch_movements(client: httpx.Client, symbol: str) -> TickerMovements:
         response = client.get(
             f"/tickers/{symbol}", params={"limit": PAGE_SIZE, "offset": offset}
         )
-        body = response.json() if response.content else {}
+        body = json_body(response)
         pages.append((response.status_code, body))
         if response.status_code >= 400:
             break
@@ -374,14 +402,13 @@ def ask(client: httpx.Client, question: str, ticker: str) -> ChatTiming:
         started = time.perf_counter()
         response = client.post("/chat", json=payload)
         elapsed = time.perf_counter() - started
-        retry_after = float(response.headers.get("retry-after") or 0)
+        retry_after = retry_after_seconds(response.headers.get("retry-after"))
         if response.status_code == 429 and attempt == 0 and 0 < retry_after <= MAX_RETRY_AFTER_SECONDS:
             print(f"rate limited; waiting {retry_after:.0f}s (not timed)")
             time.sleep(retry_after)
             continue
         break
-    body = response.json() if response.content else {}
-    return analyse_answer(question, response.status_code, elapsed, body)
+    return analyse_answer(question, response.status_code, elapsed, json_body(response))
 
 
 def cmd_chat(args: argparse.Namespace) -> int:
@@ -422,7 +449,7 @@ def main(argv: list[str] | None = None) -> int:
 
     usage = sub.add_parser("usage", help="spend per enrichment from /admin/usage")
     usage.add_argument("--base-url", required=True)
-    usage.add_argument("--days", type=int, default=DEFAULT_USAGE_DAYS)
+    usage.add_argument("--days", type=positive_int, default=DEFAULT_USAGE_DAYS)
     usage.add_argument("--end", type=date.fromisoformat, help="last UTC day (default today)")
     usage.add_argument("--json-out", type=Path)
 
