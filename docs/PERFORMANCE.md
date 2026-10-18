@@ -91,6 +91,21 @@ What the numbers say:
   revalidation additionally saves the bytes (a 304 has no body, against tens of
   kilobytes with a year of prices).
 
+### After Phase 5 (Ask Metrix with tools)
+
+Ask Metrix now makes at least two model calls per question (a lookup, then the
+answer), so the fake model's 1.0 s is paid twice. Same spike, 50 users, Phase 5 code
+(`docs/v2/loadtest/p5-u50-reval_*.csv`):
+
+| Endpoint | Requests | Errors | p50 | p95 | p99 |
+|---|---:|---:|---:|---:|---:|
+| `GET /tickers/[hot]` | 2,057 | 0.0% | 16 | 62 | 160 |
+| `POST /chat` | 94 | 0.0% | 2,100 | 2,200 | 2,400 |
+
+Reads are unchanged. A question costs its model calls plus about 0.1 s of Metrix
+(tool queries, citation checks, persistence), and no answer fell back to the
+database summary. Questions that need more lookups take one model call longer each.
+
 ## A limit the test found: provider RPM caps chat
 
 With the default `OPENAI_MAX_RPM=50` (the account's limit, shared across
