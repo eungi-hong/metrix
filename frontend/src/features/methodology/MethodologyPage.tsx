@@ -139,7 +139,7 @@ function ResultTable({ result, rows }: { result: ResultFile; rows: [string, stri
       <table className="mt-1 w-full text-table">
         <tbody>
           {rows.filter(([key]) => key in result.metrics).map(([key, label]) => (
-            <tr key={key} className="border-b border-line last:border-0"><td className="py-1.5">{label}</td><td className="num text-right">{format(result.metrics[key])}</td></tr>
+            <tr key={key} className="border-b border-line last:border-0"><td className="py-1.5">{label}</td><td className="num text-right">{format(result.metrics[key], RATES.has(key))}</td></tr>
           ))}
         </tbody>
       </table>
@@ -148,7 +148,10 @@ function ResultTable({ result, rows }: { result: ResultFile; rows: [string, stri
   );
 }
 
-function format(value: unknown): string {
-  if (typeof value === "number") return Number.isInteger(value) ? String(value) : value.toFixed(3);
+// Shares (0 to 1) always print three decimals; counts print as they are.
+const RATES = new Set(["hit_at_1", "recall_at_5", "tier_accuracy", "citation_precision", "required_recall"]);
+
+function format(value: unknown, rate = false): string {
+  if (typeof value === "number") return rate ? value.toFixed(3) : Number.isInteger(value) ? String(value) : value.toFixed(3);
   return value == null ? "n/a" : String(value);
 }

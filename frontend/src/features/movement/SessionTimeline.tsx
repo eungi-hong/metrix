@@ -32,7 +32,7 @@ export function SessionTimeline({ movement, frame }: { movement: Movement; frame
               </div>
             ))}
           </div>
-          <div className="relative mt-2 h-16 rounded-control bg-surface-2">
+          <div className="relative mt-2 h-20 rounded-control bg-surface-2">
             {BUCKETS.slice(1).map((b) => {
               const left = BUCKETS.slice(0, BUCKETS.indexOf(b)).reduce((s, x) => s + WIDTH[x], 0);
               return <div key={b} aria-hidden className="absolute bottom-0 top-0 w-px bg-line" style={{ left: `${left}%` }} />;
@@ -42,9 +42,9 @@ export function SessionTimeline({ movement, frame }: { movement: Movement; frame
             ))}
             {timed.map((item, i) => (
               <a key={item.id} href={`#${item.id}`} title={`${item.label}, ${etTime(item.at)}`}
-                className={cx("absolute bottom-2 grid size-5 -translate-x-1/2 place-items-center rounded-full text-[10px] font-semibold",
+                className={cx("absolute grid size-6 -translate-x-1/2 place-items-center rounded-full text-[11px] font-semibold",
                   item.kind === "filing" ? "bg-ink text-accent-contrast" : "border border-ink bg-surface text-ink")}
-                style={{ left: `${position(item.at!, item.timing!, frame)}%`, bottom: `${8 + (i % 2) * 18}px` }}>
+                style={{ left: `${position(item.at!, item.timing!, frame)}%`, bottom: `${6 + (i % 2) * 28}px` }}>
                 <span aria-hidden>{item.kind === "filing" ? "F" : "A"}</span>
                 <span className="sr-only">{item.label}, {etTime(item.at)}</span>
               </a>

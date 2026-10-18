@@ -85,11 +85,11 @@ export const handlers = [
     const stream = new ReadableStream({
       async start(controller) {
         for (const [event, data] of events) {
-          await delay(250);
+          await delay(600);
           controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
         }
         coldReady = true;
-        controller.enqueue(encoder.encode(`event: job\ndata: ${JSON.stringify({ id: 77, kind: "ingest_ticker", status: "succeeded", progress: { stage: "enriching", done: 3, total: 3 } })}\n\n`));
+        controller.enqueue(encoder.encode(`event: job\ndata: ${JSON.stringify({ id: 77, kind: "ingest_ticker", status: "succeeded", progress: { stage: "enriching", done: 3, total: 3, sessions: 260, movements: 3 } })}\n\n`));
         controller.close();
       },
     });
