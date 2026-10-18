@@ -6,29 +6,31 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
+
+from app.schemas.base import ApiModel
 
 from app.models.identity import Plan
 from app.models.jobs import JobKind, JobStatus, PrewarmRunStatus
 
 
-class PrewarmTriggered(BaseModel):
+class PrewarmTriggered(ApiModel):
     job_id: int
     trading_date: date
 
 
-class BackfillQueued(BaseModel):
+class BackfillQueued(ApiModel):
     queued: int = Field(description="Tickers with an analytics backfill job now active.")
     symbols: list[str]
 
 
-class JobCount(BaseModel):
+class JobCount(ApiModel):
     kind: JobKind
     status: JobStatus
     count: int
 
 
-class DeadJob(BaseModel):
+class DeadJob(ApiModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -39,7 +41,7 @@ class DeadJob(BaseModel):
     finished_at: datetime | None
 
 
-class PrewarmRunOut(BaseModel):
+class PrewarmRunOut(ApiModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -56,7 +58,7 @@ class PrewarmRunOut(BaseModel):
     duration_seconds: float | None = None
 
 
-class QueueSummary(BaseModel):
+class QueueSummary(ApiModel):
     counts: list[JobCount] = Field(description="Jobs by (kind, status).")
     oldest_queued_age_seconds: float | None = Field(
         description="How long the longest-waiting due job has waited; the "
@@ -69,7 +71,7 @@ class QueueSummary(BaseModel):
     last_run: PrewarmRunOut | None
 
 
-class SpendByOperation(BaseModel):
+class SpendByOperation(ApiModel):
     provider: str
     operation: str
     calls: int
@@ -77,13 +79,13 @@ class SpendByOperation(BaseModel):
     estimated_calls: int = Field(description="Calls whose cost is an estimate, not the provider's figure.")
 
 
-class SpendByUser(BaseModel):
+class SpendByUser(ApiModel):
     user_id: int
     calls: int
     cost_usd: Decimal
 
 
-class UsageSummary(BaseModel):
+class UsageSummary(ApiModel):
     """One UTC day's spend. Ledger figures are settled calls only; calls in
     flight show under `reserved_usd`."""
 
@@ -108,20 +110,20 @@ class UsageSummary(BaseModel):
 StoredPlan = Literal["free", "pro", "internal"]
 
 
-class UserCreate(BaseModel):
+class UserCreate(ApiModel):
     name: str = Field(min_length=1, max_length=200)
     email: str | None = Field(default=None, max_length=320)
     plan: StoredPlan = "free"
 
 
-class UserPatch(BaseModel):
+class UserPatch(ApiModel):
     plan: StoredPlan | None = None
     disabled: bool | None = Field(
         default=None, description="true disables the user (every key stops working); false re-enables."
     )
 
 
-class UserOut(BaseModel):
+class UserOut(ApiModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -132,11 +134,11 @@ class UserOut(BaseModel):
     disabled_at: datetime | None
 
 
-class KeyCreate(BaseModel):
+class KeyCreate(ApiModel):
     label: str | None = Field(default=None, max_length=200)
 
 
-class KeyOut(BaseModel):
+class KeyOut(ApiModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -152,7 +154,7 @@ class KeyCreated(KeyOut):
     key: str = Field(description="The API key. Shown this once; only its hash is stored.")
 
 
-class RequestInfo(BaseModel):
+class RequestInfo(ApiModel):
     peer: str | None = Field(description="The socket peer: the last proxy, behind one.")
     x_forwarded_for: str | None
     hops: list[str] = Field(description="X-Forwarded-For split, leftmost (client-written) first.")

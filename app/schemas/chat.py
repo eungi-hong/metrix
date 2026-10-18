@@ -5,10 +5,12 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from app.schemas.base import ApiModel
 
 
-class ChatRequest(BaseModel):
+class ChatRequest(ApiModel):
     question: str = Field(min_length=1, max_length=2000)
     ticker: str | None = Field(
         default=None,
@@ -25,7 +27,7 @@ class ChatRequest(BaseModel):
     end: date | None = None
 
 
-class MovementSource(BaseModel):
+class MovementSource(ApiModel):
     """A movement the answer cites, with its citation label."""
 
     ref: str = Field(description="Citation label used in the answer: M and the movement id, e.g. 'M412'.")
@@ -36,7 +38,7 @@ class MovementSource(BaseModel):
     direction: str
 
 
-class ArticleSource(BaseModel):
+class ArticleSource(ApiModel):
     ref: str = Field(description="Citation label used in the answer: A and the article id, e.g. 'A1033'.")
     article_id: int
     title: str | None
@@ -47,7 +49,7 @@ class ArticleSource(BaseModel):
     relevance_score: float | None = None
 
 
-class FilingSource(BaseModel):
+class FilingSource(ApiModel):
     ref: str = Field(description="Citation label used in the answer: F and the filing id, e.g. 'F7'.")
     filing_id: int
     symbol: str | None = None
@@ -58,7 +60,7 @@ class FilingSource(BaseModel):
     accepted_at: datetime | None = None
 
 
-class ChatSources(BaseModel):
+class ChatSources(ApiModel):
     """Only what the answer actually cites."""
 
     movements: list[MovementSource] = Field(default_factory=list)
@@ -66,7 +68,7 @@ class ChatSources(BaseModel):
     filings: list[FilingSource] = Field(default_factory=list)
 
 
-class ToolCallOut(BaseModel):
+class ToolCallOut(ApiModel):
     """A database lookup the model made while answering."""
 
     name: str
@@ -74,7 +76,7 @@ class ToolCallOut(BaseModel):
     summary: str
 
 
-class ChatResponse(BaseModel):
+class ChatResponse(ApiModel):
     conversation_id: str
     ticker: str | None = Field(description="The main ticker the answer is about, if any.")
     answer: str
@@ -97,7 +99,7 @@ class ChatResponse(BaseModel):
     )
 
 
-class ErrorOut(BaseModel):
+class ErrorOut(ApiModel):
     """Uniform error body for every non-2xx response."""
 
     error: Literal[
@@ -113,7 +115,7 @@ class ErrorOut(BaseModel):
     detail: str
 
 
-class ConversationSummary(BaseModel):
+class ConversationSummary(ApiModel):
     id: str
     ticker: str | None
     created_at: datetime
@@ -121,14 +123,14 @@ class ConversationSummary(BaseModel):
     messages: int = Field(description="Messages in the conversation, questions and answers.")
 
 
-class ConversationList(BaseModel):
+class ConversationList(ApiModel):
     conversations: list[ConversationSummary]
     limit: int
     offset: int
     total: int
 
 
-class MessageOut(BaseModel):
+class MessageOut(ApiModel):
     id: int
     role: str
     content: str
@@ -138,7 +140,7 @@ class MessageOut(BaseModel):
     created_at: datetime
 
 
-class ConversationDetail(BaseModel):
+class ConversationDetail(ApiModel):
     id: str
     ticker: str | None
     created_at: datetime

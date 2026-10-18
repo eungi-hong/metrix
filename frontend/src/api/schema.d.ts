@@ -545,20 +545,20 @@ export interface components {
         };
         /** AppliedFiltersOut */
         AppliedFiltersOut: {
-            direction?: components["schemas"]["Direction"] | null;
+            direction: components["schemas"]["Direction"] | null;
             /** Dominant */
-            dominant?: ("market" | "sector" | "company")[] | null;
+            dominant: ("market" | "sector" | "company")[] | null;
             /** End */
-            end?: string | null;
+            end: string | null;
             /**
              * Include Unqualified
              * @default false
              */
             include_unqualified: boolean;
             /** Min Magnitude */
-            min_magnitude?: number | null;
+            min_magnitude: number | null;
             /** Min Sar */
-            min_sar?: number | null;
+            min_sar: number | null;
             /**
              * Sort
              * @default date
@@ -566,11 +566,11 @@ export interface components {
              */
             sort: "date" | "abs_return" | "abs_sar" | "rvol";
             /** Start */
-            start?: string | null;
+            start: string | null;
             /** Tiers */
-            tiers?: components["schemas"]["RelevanceTier"][] | null;
+            tiers: components["schemas"]["RelevanceTier"][] | null;
             /** Triggers */
-            triggers?: ("raw" | "abnormal" | "both")[] | null;
+            triggers: ("raw" | "abnormal" | "both")[] | null;
         };
         /** ArticleOut */
         ArticleOut: {
@@ -584,7 +584,7 @@ export interface components {
              * Source
              * @description Publisher domain.
              */
-            source?: string | null;
+            source: string | null;
             /** Summary */
             summary: string | null;
             /** Title */
@@ -604,9 +604,9 @@ export interface components {
              */
             ref: string;
             /** Relevance Score */
-            relevance_score?: number | null;
+            relevance_score: number | null;
             /** Relevance Tier */
-            relevance_tier?: string | null;
+            relevance_tier: string | null;
             /** Source */
             source: string | null;
             /** Title */
@@ -705,14 +705,14 @@ export interface components {
              * Suggestions
              * @description Follow-up questions built from the data (not by a model).
              */
-            suggestions?: string[];
+            suggestions: string[];
             /**
              * Ticker
              * @description The main ticker the answer is about, if any.
              */
             ticker: string | null;
             /** Tool Calls */
-            tool_calls?: components["schemas"]["ToolCallOut"][];
+            tool_calls: components["schemas"]["ToolCallOut"][];
         };
         /**
          * ChatSources
@@ -720,11 +720,11 @@ export interface components {
          */
         ChatSources: {
             /** Articles */
-            articles?: components["schemas"]["ArticleSource"][];
+            articles: components["schemas"]["ArticleSource"][];
             /** Filings */
-            filings?: components["schemas"]["FilingSource"][];
+            filings: components["schemas"]["FilingSource"][];
             /** Movements */
-            movements?: components["schemas"]["MovementSource"][];
+            movements: components["schemas"]["MovementSource"][];
         };
         /** ConversationDetail */
         ConversationDetail: {
@@ -808,7 +808,7 @@ export interface components {
              * Beta Sector
              * @description Loading on the sector's market-neutral return.
              */
-            beta_sector?: number | null;
+            beta_sector: number | null;
             /**
              * Dominant
              * @description The largest of market, sector, company by size.
@@ -838,14 +838,14 @@ export interface components {
              * Note
              * @description A caveat, e.g. why the model is market only.
              */
-            note?: string | null;
+            note: string | null;
             /** R Squared */
             r_squared: number;
             /**
              * Sar
              * @description Standardised abnormal return (forecast-error adjusted). A heuristic size in residual standard deviations, not a probability.
              */
-            sar?: number | null;
+            sar: number | null;
             /**
              * Sector
              * @description beta_sector * the sector's market-neutral return that day.
@@ -855,7 +855,7 @@ export interface components {
              * Sector Benchmark
              * @description Null for a market-only model (no mapped sector).
              */
-            sector_benchmark?: string | null;
+            sector_benchmark: string | null;
             /**
              * Sigma E
              * @description Residual standard deviation, as a daily return.
@@ -909,7 +909,7 @@ export interface components {
         /** DigestMoveOut */
         DigestMoveOut: {
             /** Abnormal Return */
-            abnormal_return?: number | null;
+            abnormal_return: number | null;
             /** Daily Return */
             daily_return: number;
             /**
@@ -937,13 +937,13 @@ export interface components {
          */
         DriftOut: {
             /** Car 20 */
-            car_20?: number | null;
+            car_20: number | null;
             /** Car 5 */
-            car_5?: number | null;
+            car_5: number | null;
             /** Label 20 */
-            label_20?: ("continued" | "held" | "reversed") | null;
+            label_20: ("continued" | "held" | "reversed") | null;
             /** Label 5 */
-            label_5?: ("continued" | "held" | "reversed") | null;
+            label_5: ("continued" | "held" | "reversed") | null;
         };
         /**
          * EarningsEventOut
@@ -960,7 +960,7 @@ export interface components {
              */
             filing_date: string;
             /** @description The movement on that session, if the day was flagged. */
-            movement?: components["schemas"]["EarningsMovementOut"] | null;
+            movement: components["schemas"]["EarningsMovementOut"] | null;
             /**
              * Session
              * @description The first session whose prices could reflect it.
@@ -972,12 +972,12 @@ export interface components {
              */
             timing: "before_open" | "during_session" | "after_close" | "unknown";
             /** Url */
-            url?: string | null;
+            url: string | null;
         };
         /** EarningsMovementOut */
         EarningsMovementOut: {
             /** Abnormal Return */
-            abnormal_return?: number | null;
+            abnormal_return: number | null;
             /** Daily Return */
             daily_return: number;
             /**
@@ -986,7 +986,7 @@ export interface components {
              */
             date: string;
             /** Evidence */
-            evidence?: ("explained" | "abstained" | "no_evidence" | "researching" | "queued" | "budget_deferred" | "window_open" | "retrying" | "failed" | "not_started") | null;
+            evidence: ("explained" | "abstained" | "no_evidence" | "researching" | "queued" | "budget_deferred" | "window_open" | "retrying" | "failed" | "not_started") | null;
         };
         /** EarningsOut */
         EarningsOut: {
@@ -1013,7 +1013,7 @@ export interface components {
              * Expected By
              * @description When research may next start: the queued job's start time, the spend cap's reset, or the next nightly run. Null when nothing is owed.
              */
-            expected_by?: string | null;
+            expected_by: string | null;
             /**
              * State
              * @enum {string}
@@ -1023,7 +1023,7 @@ export interface components {
              * Window Closes At
              * @description When the movement's news window closes.
              */
-            window_closes_at?: string | null;
+            window_closes_at: string | null;
         };
         /**
          * FilingOut
@@ -1032,34 +1032,34 @@ export interface components {
          */
         FilingOut: {
             /** Accepted At */
-            accepted_at?: string | null;
+            accepted_at: string | null;
             /** Accession */
             accession: string;
             /** Events */
-            events?: string[];
+            events: string[];
             /** Form */
             form: string;
             /** Items */
-            items?: string[];
+            items: string[];
             /** Rationale */
-            rationale?: string | null;
+            rationale: string | null;
             /** Relevance Score */
-            relevance_score?: number | null;
+            relevance_score: number | null;
             /** Relevance Tier */
-            relevance_tier?: string | null;
+            relevance_tier: string | null;
             /** Role */
-            role?: ("primary" | "contributing" | "context") | null;
+            role: ("primary" | "contributing" | "context") | null;
             /** Timing */
-            timing?: ("before_prior_close" | "overnight" | "intraday" | "after_close" | "later") | null;
+            timing: ("before_prior_close" | "overnight" | "intraday" | "after_close" | "later") | null;
             /** Timing Precision */
-            timing_precision?: ("time" | "day") | null;
+            timing_precision: ("time" | "day") | null;
             /** Url */
-            url?: string | null;
+            url: string | null;
         };
         /** FilingSource */
         FilingSource: {
             /** Accepted At */
-            accepted_at?: string | null;
+            accepted_at: string | null;
             /** Accession */
             accession: string;
             /** Filing Id */
@@ -1067,16 +1067,16 @@ export interface components {
             /** Form */
             form: string;
             /** Items */
-            items?: string[];
+            items: string[];
             /**
              * Ref
              * @description Citation label used in the answer: F and the filing id, e.g. 'F7'.
              */
             ref: string;
             /** Symbol */
-            symbol?: string | null;
+            symbol: string | null;
             /** Url */
-            url?: string | null;
+            url: string | null;
         };
         /** HTTPValidationError */
         HTTPValidationError: {
@@ -1130,17 +1130,17 @@ export interface components {
              */
             created_at: string;
             /** Finished At */
-            finished_at?: string | null;
+            finished_at: string | null;
             /** Id */
             id: number;
             kind: components["schemas"]["JobKind"];
             /** Last Error */
-            last_error?: string | null;
+            last_error: string | null;
             /**
              * Locked At
              * @description When a worker claimed it, or last heartbeated.
              */
-            locked_at?: string | null;
+            locked_at: string | null;
             /** Max Attempts */
             max_attempts: number;
             /** Payload */
@@ -1154,7 +1154,7 @@ export interface components {
              * Progress
              * @description Handler-reported progress, e.g. done/total.
              */
-            progress?: Record<string, never> | null;
+            progress: Record<string, never> | null;
             /**
              * Run After
              * Format: date-time
@@ -1264,7 +1264,7 @@ export interface components {
              * Rationale
              * @description One line on why this article explains the move.
              */
-            rationale?: string | null;
+            rationale: string | null;
             /** Relevance Score */
             relevance_score: number;
             /** @description What the article is: easy (company), medium (competitor/industry), or hard (macro/political). */
@@ -1273,27 +1273,27 @@ export interface components {
              * Role
              * @description Scorer v2 only: the cause, part of it, or background.
              */
-            role?: ("primary" | "contributing" | "context") | null;
+            role: ("primary" | "contributing" | "context") | null;
             /**
              * Scorer Version
              * @description v1 or v2; null before v2 existed.
              */
-            scorer_version?: string | null;
+            scorer_version: string | null;
             /**
              * Search Tier
              * @description Which tier's search surfaced the article.
              */
-            search_tier?: string | null;
+            search_tier: string | null;
             /**
              * Timing
              * @description When it was published relative to the move's XNYS sessions (previous session P, the move's session T, the next session N): before_prior_close (at or before close(P)), overnight (close(P) to open(T)), intraday (open(T) to close(T)), after_close (close(T) to open(N)) or later. Only the first three can have caused T's close-to-close move. Null when unknown.
              */
-            timing?: ("before_prior_close" | "overnight" | "intraday" | "after_close" | "later") | null;
+            timing: ("before_prior_close" | "overnight" | "intraday" | "after_close" | "later") | null;
             /**
              * Timing Precision
              * @description 'time' when the publication time is known; 'day' when only the date is, in which case `timing` is set only if the whole day falls in one bucket.
              */
-            timing_precision?: ("time" | "day") | null;
+            timing_precision: ("time" | "day") | null;
         };
         /** MarketPulseOut */
         MarketPulseOut: {
@@ -1327,7 +1327,7 @@ export interface components {
             /** Role */
             role: string;
             /** @description For answers: what was in the prompt it was grounded in. */
-            sources?: components["schemas"]["ChatSources"] | null;
+            sources: components["schemas"]["ChatSources"] | null;
         };
         /** MovementCaseOut */
         MovementCaseOut: {
@@ -1339,7 +1339,7 @@ export interface components {
              * Next Date
              * @description The ticker's next movement.
              */
-            next_date?: string | null;
+            next_date: string | null;
             /**
              * Peers
              * @description The ticker's peer set and how each did that session (prices only, refreshed nightly for the pre-warmed universe's peers).
@@ -1349,9 +1349,9 @@ export interface components {
              * Previous Date
              * @description The ticker's previous movement.
              */
-            previous_date?: string | null;
+            previous_date: string | null;
             /** @description Null outside the exchange calendar. */
-            session?: components["schemas"]["SessionFrameOut"] | null;
+            session: components["schemas"]["SessionFrameOut"] | null;
             ticker: components["schemas"]["TickerOut"];
         };
         /**
@@ -1360,7 +1360,7 @@ export interface components {
          */
         MovementOut: {
             /** Abstain Reason */
-            abstain_reason?: string | null;
+            abstain_reason: string | null;
             /** Adj Close */
             adj_close: number;
             /**
@@ -1379,12 +1379,12 @@ export interface components {
              */
             date: string;
             /** @description Null when the day could not be decomposed. */
-            decomposition?: components["schemas"]["DecompositionOut"] | null;
+            decomposition: components["schemas"]["DecompositionOut"] | null;
             /**
              * Decomposition Warning
              * @description Why there is no decomposition, when there is none.
              */
-            decomposition_warning?: string | null;
+            decomposition_warning: string | null;
             /** Detector Floor */
             detector_floor: number;
             /** Detector K */
@@ -1392,24 +1392,24 @@ export interface components {
             /** Detector Window */
             detector_window: number;
             direction: components["schemas"]["Direction"];
-            drift?: components["schemas"]["DriftOut"] | null;
+            drift: components["schemas"]["DriftOut"] | null;
             /** @description Why there is or is not evidence yet, and when there will be. */
-            evidence?: components["schemas"]["EvidenceStatusOut"] | null;
+            evidence: components["schemas"]["EvidenceStatusOut"] | null;
             /**
              * Evidence Abstained
              * @description Scorer v2: true when it judged that nothing explains the move.
              */
-            evidence_abstained?: boolean | null;
+            evidence_abstained: boolean | null;
             /**
              * Filings
              * @description SEC filings in the news window (when EDGAR is enabled).
              */
-            filings?: components["schemas"]["FilingOut"][];
+            filings: components["schemas"]["FilingOut"][];
             /** Id */
             id: number;
-            legs?: components["schemas"]["LegsOut"] | null;
+            legs: components["schemas"]["LegsOut"] | null;
             /** News */
-            news?: components["schemas"]["LinkedArticleOut"][];
+            news: components["schemas"]["LinkedArticleOut"][];
             news_status: components["schemas"]["NewsStatus"];
             /** Prev Adj Close */
             prev_adj_close: number;
@@ -1419,17 +1419,17 @@ export interface components {
              * @default true
              */
             qualifies: boolean;
-            regime?: components["schemas"]["RegimeOut"] | null;
+            regime: components["schemas"]["RegimeOut"] | null;
             /**
              * Rolling Std
              * @description Stdev of the N returns before this day.
              */
-            rolling_std?: number | null;
+            rolling_std: number | null;
             /**
              * Sigma Multiple
              * @description Size of the move in standard deviations.
              */
-            sigma_multiple?: number | null;
+            sigma_multiple: number | null;
             /**
              * Threshold
              * @description The bar this day had to clear.
@@ -1450,7 +1450,7 @@ export interface components {
             /** Volume */
             volume: number | null;
             /** @description Relative volume. (`volume` above is the day's share volume.) */
-            volume_analysis?: components["schemas"]["VolumeAnalysisOut"] | null;
+            volume_analysis: components["schemas"]["VolumeAnalysisOut"] | null;
         };
         /**
          * MovementSource
@@ -1474,7 +1474,7 @@ export interface components {
              */
             ref: string;
             /** Symbol */
-            symbol?: string | null;
+            symbol: string | null;
         };
         /**
          * NewsStatus
@@ -1512,7 +1512,7 @@ export interface components {
         /** PrewarmRunOut */
         PrewarmRunOut: {
             /** Duration Seconds */
-            duration_seconds?: number | null;
+            duration_seconds: number | null;
             /** Enrichment Budget */
             enrichment_budget: number;
             /** Enrichments Deferred */
@@ -1682,9 +1682,9 @@ export interface components {
              * Daily Return
              * @description Close to close on the movement's session; null when no bars are stored.
              */
-            daily_return?: number | null;
+            daily_return: number | null;
             /** Name */
-            name?: string | null;
+            name: string | null;
             /**
              * Role
              * @description competitor, supplier, customer, partner; or market, sector.
@@ -1702,12 +1702,12 @@ export interface components {
              * Percentile
              * @description 0 to 100, against the same measure over the past year.
              */
-            percentile?: number | null;
+            percentile: number | null;
             /**
              * Realized Vol
              * @description Annualised.
              */
-            realized_vol?: number | null;
+            realized_vol: number | null;
             /** Window Sessions */
             window_sessions: number;
         };
@@ -1826,16 +1826,16 @@ export interface components {
         /** SymbolMatchOut */
         SymbolMatchOut: {
             /** Exchange */
-            exchange?: string | null;
+            exchange: string | null;
             /**
              * Has Data
              * @description Metrix already holds researched data for it.
              */
             has_data: boolean;
             /** Is Etf */
-            is_etf?: boolean | null;
+            is_etf: boolean | null;
             /** Name */
-            name?: string | null;
+            name: string | null;
             /** Symbol */
             symbol: string;
         };
@@ -1855,18 +1855,18 @@ export interface components {
              * Benchmarks
              * @description With include_benchmarks=true: the market and sector benchmarks over the same dates as the ticker's bars, rebased to 100 on its first bar in range.
              */
-            benchmarks?: components["schemas"]["BenchmarkSeriesOut"][] | null;
+            benchmarks: components["schemas"]["BenchmarkSeriesOut"][] | null;
             filters: components["schemas"]["AppliedFiltersOut"];
             ingest_status: components["schemas"]["IngestStatus"];
             /**
              * Job Id
              * @description The queued ingestion job, when this request started or joined one. Follow it at GET /jobs/{job_id}.
              */
-            job_id?: number | null;
+            job_id: number | null;
             /** Last Ingested At */
             last_ingested_at: string | null;
             /** Message */
-            message?: string | null;
+            message: string | null;
             /** Movements */
             movements: components["schemas"]["MovementOut"][];
             pagination: components["schemas"]["PaginationOut"];
@@ -1875,7 +1875,7 @@ export interface components {
              * Prices
              * @description The daily bars themselves, honouring `start`/`end`. Present only when requested with `include_prices=true`.
              */
-            prices?: components["schemas"]["PriceBarOut"][] | null;
+            prices: components["schemas"]["PriceBarOut"][] | null;
             /**
              * Status
              * @description 'ready' -- data is fresh. 'ingesting' -- first-time fetch is running, movements will be empty. 'refreshing' -- stale data is shown while a refresh runs. 'failed' -- the last ingestion failed.
@@ -1884,16 +1884,16 @@ export interface components {
             status: "ready" | "ingesting" | "refreshing" | "failed";
             ticker: components["schemas"]["TickerOut"];
             /** Warnings */
-            warnings?: string[];
+            warnings: string[];
         };
         /** TickerFilingOut */
         TickerFilingOut: {
             /** Accepted At */
-            accepted_at?: string | null;
+            accepted_at: string | null;
             /** Accession */
             accession: string;
             /** Events */
-            events?: string[];
+            events: string[];
             /**
              * Filing Date
              * Format: date
@@ -1902,21 +1902,21 @@ export interface components {
             /** Form */
             form: string;
             /** Items */
-            items?: string[];
+            items: string[];
             /**
              * Movement Dates
              * @description Movements whose news window this filing falls in.
              */
-            movement_dates?: string[];
+            movement_dates: string[];
             /** Url */
-            url?: string | null;
+            url: string | null;
         };
         /** TickerFilingsOut */
         TickerFilingsOut: {
             /** Filings */
             filings: components["schemas"]["TickerFilingOut"][];
             /** Note */
-            note?: string | null;
+            note: string | null;
             /** Symbol */
             symbol: string;
         };
@@ -2075,7 +2075,7 @@ export interface components {
              * Missing
              * @description Holdings with no stored prices; GET /tickers/{symbol} fetches them.
              */
-            missing?: string[];
+            missing: string[];
             /** Name */
             name: string;
             /**

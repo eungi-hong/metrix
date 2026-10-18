@@ -6,12 +6,14 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from app.schemas.base import ApiModel
 
 from app.schemas.market import EvidenceState, MovementOut, TickerOut
 
 
-class SymbolMatchOut(BaseModel):
+class SymbolMatchOut(ApiModel):
     symbol: str
     name: str | None = None
     exchange: str | None = None
@@ -19,12 +21,12 @@ class SymbolMatchOut(BaseModel):
     has_data: bool = Field(description="Metrix already holds researched data for it.")
 
 
-class SymbolSearchOut(BaseModel):
+class SymbolSearchOut(ApiModel):
     query: str
     results: list[SymbolMatchOut]
 
 
-class ReferenceReturnOut(BaseModel):
+class ReferenceReturnOut(ApiModel):
     """A peer's or benchmark's return over the same session."""
 
     symbol: str | None
@@ -35,7 +37,7 @@ class ReferenceReturnOut(BaseModel):
     )
 
 
-class RawTestOut(BaseModel):
+class RawTestOut(ApiModel):
     daily_return: float
     threshold: float = Field(description="max(floor, k * rolling sigma), as stored at detection.")
     threshold_source: str
@@ -46,7 +48,7 @@ class RawTestOut(BaseModel):
     passed: bool
 
 
-class AbnormalTestOut(BaseModel):
+class AbnormalTestOut(ApiModel):
     sar: float | None
     abnormal_return: float | None
     k: float = Field(description="MOVEMENT_ABNORMAL_K now (not stored per movement).")
@@ -55,7 +57,7 @@ class AbnormalTestOut(BaseModel):
     passed: bool | None = Field(description="Null when the movement could not be decomposed.")
 
 
-class DetectionAuditOut(BaseModel):
+class DetectionAuditOut(ApiModel):
     """Why the day was flagged: both tests, with their inputs."""
 
     trigger: str = Field(description="raw, abnormal or both, as stored; raw for movements before v2.")
@@ -65,7 +67,7 @@ class DetectionAuditOut(BaseModel):
     abnormal: AbnormalTestOut
 
 
-class SessionFrameOut(BaseModel):
+class SessionFrameOut(ApiModel):
     """The session's boundaries on the New York Stock Exchange calendar (early
     closes and holidays included), for placing evidence on a timeline."""
 
@@ -76,7 +78,7 @@ class SessionFrameOut(BaseModel):
     next_open: datetime
 
 
-class MovementCaseOut(BaseModel):
+class MovementCaseOut(ApiModel):
     ticker: TickerOut
     session: SessionFrameOut | None = Field(default=None, description="Null outside the exchange calendar.")
     movement: MovementOut
@@ -90,7 +92,7 @@ class MovementCaseOut(BaseModel):
     next_date: date | None = Field(default=None, description="The ticker's next movement.")
 
 
-class TickerFilingOut(BaseModel):
+class TickerFilingOut(ApiModel):
     accession: str
     form: str
     items: list[str] = Field(default_factory=list)
@@ -103,20 +105,20 @@ class TickerFilingOut(BaseModel):
     )
 
 
-class TickerFilingsOut(BaseModel):
+class TickerFilingsOut(ApiModel):
     symbol: str
     filings: list[TickerFilingOut]
     note: str | None = None
 
 
-class EarningsMovementOut(BaseModel):
+class EarningsMovementOut(ApiModel):
     date: date
     daily_return: float
     abnormal_return: float | None = None
     evidence: EvidenceState | None = None
 
 
-class EarningsEventOut(BaseModel):
+class EarningsEventOut(ApiModel):
     """An earnings release, from an 8-K with Item 2.02."""
 
     accession: str
@@ -130,14 +132,14 @@ class EarningsEventOut(BaseModel):
     )
 
 
-class EarningsOut(BaseModel):
+class EarningsOut(ApiModel):
     symbol: str
     source: str = "sec_8k_item_2.02"
     events: list[EarningsEventOut]
     note: str
 
 
-class PulseMoverOut(BaseModel):
+class PulseMoverOut(ApiModel):
     symbol: str
     company_name: str | None
     date: date
@@ -149,13 +151,13 @@ class PulseMoverOut(BaseModel):
     evidence: EvidenceState
 
 
-class SectorReturnOut(BaseModel):
+class SectorReturnOut(ApiModel):
     sector: str
     symbol: str
     total_return: float | None = Field(description="Compounded over the sessions; null without bars.")
 
 
-class MarketPulseOut(BaseModel):
+class MarketPulseOut(ApiModel):
     sessions: list[date] = Field(description="The sessions covered, latest last.")
     movers: list[PulseMoverOut] = Field(description="Largest abnormal moves first.")
     sectors: list[SectorReturnOut] = Field(description="Benchmarks' compounded return over the sessions.")

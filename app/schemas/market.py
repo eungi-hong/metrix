@@ -11,7 +11,9 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
+
+from app.schemas.base import ApiModel
 
 from app.models.enums import Direction, IngestStatus, NewsStatus, RelevanceTier
 
@@ -23,7 +25,7 @@ DriftLabelOut = Literal["continued", "held", "reversed"]
 MovementSort = Literal["date", "abs_return", "abs_sar", "rvol"]
 
 
-class PriceBarOut(BaseModel):
+class PriceBarOut(ApiModel):
     """One daily OHLCV bar.
 
     Returned only when `include_prices=true`: a year of bars is ~250 rows, which
@@ -43,7 +45,7 @@ class PriceBarOut(BaseModel):
     volume: int | None
 
 
-class ArticleOut(BaseModel):
+class ArticleOut(ApiModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -55,7 +57,7 @@ class ArticleOut(BaseModel):
     summary: str | None
 
 
-class LinkedArticleOut(BaseModel):
+class LinkedArticleOut(ApiModel):
     """An article together with the verdict connecting it to the movement."""
 
     article: ArticleOut
@@ -97,7 +99,7 @@ EvidenceState = Literal[
 ]
 
 
-class EvidenceStatusOut(BaseModel):
+class EvidenceStatusOut(ApiModel):
     """Where the movement's evidence stands and when it will be there."""
 
     state: EvidenceState
@@ -112,7 +114,7 @@ class EvidenceStatusOut(BaseModel):
     )
 
 
-class FilingOut(BaseModel):
+class FilingOut(ApiModel):
     """An SEC filing in the movement's window, with its session timing, and
     scorer v2's verdict on it when it was judged."""
 
@@ -130,7 +132,7 @@ class FilingOut(BaseModel):
     rationale: str | None = None
 
 
-class DecompositionOut(BaseModel):
+class DecompositionOut(ApiModel):
     """The day's return in parts: alpha + market + sector + abnormal = daily_return.
 
     From a market model with an orthogonalised sector factor, estimated on
@@ -163,21 +165,21 @@ class DecompositionOut(BaseModel):
     note: str | None = Field(default=None, description="A caveat, e.g. why the model is market only.")
 
 
-class LegsOut(BaseModel):
+class LegsOut(ApiModel):
     """Where in the session the move happened. (1 + gap) * (1 + intraday) = 1 + daily_return."""
 
     gap: float = Field(description="Prior adjusted close to the (adjusted) open.")
     intraday: float = Field(description="Open to close.")
 
 
-class VolumeAnalysisOut(BaseModel):
+class VolumeAnalysisOut(ApiModel):
     relative_volume: float = Field(
         description="The day's volume over the median of the sessions before it."
     )
     lookback_sessions: int
 
 
-class DriftOut(BaseModel):
+class DriftOut(ApiModel):
     """What happened next: cumulative abnormal return after the move, with the
     model fixed at the move. Null until those sessions exist."""
 
@@ -187,7 +189,7 @@ class DriftOut(BaseModel):
     label_20: DriftLabelOut | None = None
 
 
-class RegimeOut(BaseModel):
+class RegimeOut(ApiModel):
     """Volatility going into the move (the sessions before it, not including it)."""
 
     realized_vol: float | None = Field(default=None, description="Annualised.")
@@ -197,7 +199,7 @@ class RegimeOut(BaseModel):
     window_sessions: int
 
 
-class MovementOut(BaseModel):
+class MovementOut(ApiModel):
     """One detected major movement, with the audit trail for the decision."""
 
     id: int
@@ -262,7 +264,7 @@ class MovementOut(BaseModel):
     abstain_reason: str | None = None
 
 
-class TickerOut(BaseModel):
+class TickerOut(ApiModel):
     model_config = ConfigDict(from_attributes=True)
 
     symbol: str
@@ -273,7 +275,7 @@ class TickerOut(BaseModel):
     currency: str | None
 
 
-class PriceRangeOut(BaseModel):
+class PriceRangeOut(ApiModel):
     """Summary of the stored price history, always present."""
 
     start: date | None
@@ -281,14 +283,14 @@ class PriceRangeOut(BaseModel):
     bars: int
 
 
-class PaginationOut(BaseModel):
+class PaginationOut(ApiModel):
     limit: int
     offset: int
     total: int = Field(description="Movements matching the filters, before paging.")
     returned: int
 
 
-class AppliedFiltersOut(BaseModel):
+class AppliedFiltersOut(ApiModel):
     start: date | None = None
     end: date | None = None
     min_magnitude: float | None = None
@@ -301,12 +303,12 @@ class AppliedFiltersOut(BaseModel):
     include_unqualified: bool = False
 
 
-class BenchmarkPointOut(BaseModel):
+class BenchmarkPointOut(ApiModel):
     date: date
     value: float = Field(description="Adjusted close rebased to 100 on `base_date`.")
 
 
-class BenchmarkSeriesOut(BaseModel):
+class BenchmarkSeriesOut(ApiModel):
     """A benchmark's adjusted close, rebased for a chart overlay."""
 
     symbol: str
@@ -315,7 +317,7 @@ class BenchmarkSeriesOut(BaseModel):
     points: list[BenchmarkPointOut]
 
 
-class TickerDetailOut(BaseModel):
+class TickerDetailOut(ApiModel):
     """The ticker endpoint's payload."""
 
     status: IngestState = Field(

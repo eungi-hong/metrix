@@ -4,17 +4,19 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
+
+from app.schemas.base import ApiModel
 
 from app.schemas.market import EvidenceState
 
 
-class HoldingIn(BaseModel):
+class HoldingIn(ApiModel):
     symbol: str = Field(min_length=1, max_length=16)
     weight: float | None = Field(default=None, gt=0, le=1_000_000, description="Any positive scale; normalised.")
 
 
-class WatchlistIn(BaseModel):
+class WatchlistIn(ApiModel):
     name: str = Field(min_length=1, max_length=80)
     holdings: list[HoldingIn] = Field(default_factory=list, max_length=50)
 
@@ -34,12 +36,12 @@ class WatchlistIn(BaseModel):
         return self
 
 
-class HoldingOut(BaseModel):
+class HoldingOut(ApiModel):
     symbol: str
     weight: float = Field(description="Normalised: the holdings' weights sum to 1.")
 
 
-class WatchlistOut(BaseModel):
+class WatchlistOut(ApiModel):
     id: int
     name: str
     weighted: bool = Field(description="False: equal weights.")
@@ -48,7 +50,7 @@ class WatchlistOut(BaseModel):
     updated_at: datetime
 
 
-class DigestMoveOut(BaseModel):
+class DigestMoveOut(ApiModel):
     date: date
     daily_return: float
     abnormal_return: float | None = None
@@ -56,7 +58,7 @@ class DigestMoveOut(BaseModel):
     explanation: str
 
 
-class DigestHoldingOut(BaseModel):
+class DigestHoldingOut(ApiModel):
     symbol: str
     weight: float
     has_data: bool
@@ -65,7 +67,7 @@ class DigestHoldingOut(BaseModel):
     moves: list[DigestMoveOut] = Field(description="Flagged movements in the period, newest first.")
 
 
-class WatchlistDigestOut(BaseModel):
+class WatchlistDigestOut(ApiModel):
     id: int
     name: str
     sessions: list[date]
