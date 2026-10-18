@@ -330,6 +330,9 @@ async def ingest_ticker(
     result.bars_written = refreshed.bars_written
     result.movements_detected = len(refreshed.movements)
     await session.commit()
+    # What the progress line shows: "Fetched 251 sessions, found 24 moves".
+    counts = {"sessions": len(history.bars), "movements": len(refreshed.movements)}
+    await report({"stage": "detected", **counts})
 
     now = _now()
     pending = [
@@ -342,7 +345,7 @@ async def ingest_ticker(
     )[: settings.max_movements_per_ingest]
 
     if budget:
-        await report({"stage": "enriching", "done": 0, "total": len(budget)})
+        await report({"stage": "enriching", "done": 0, "total": len(budget), **counts})
         try:
             peers = await resolve_peers(session, ticker, llm)
             for done, movement in enumerate(budget, start=1):
@@ -359,7 +362,7 @@ async def ingest_ticker(
                 result.articles_linked += linked
                 result.movements_enriched += 1
                 await session.commit()
-                await report({"stage": "enriching", "done": done, "total": len(budget)})
+                await report({"stage": "enriching", "done": done, "total": len(budget), **counts})
         except WorkDeferred as exc:
             # The prices are stored and committed; only news waits. Undo the
             # movement in progress (its attempt was not really made) and

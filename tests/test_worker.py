@@ -68,7 +68,9 @@ async def test_an_ingest_job_runs_the_pipeline(db, worker):
     job = await load(db, Job, queued.id)
     assert job.status == JobStatus.SUCCEEDED
     assert job.finished_at is not None
-    assert job.progress == {"stage": "enriching", "done": 1, "total": 1}
+    # Changed in v2 Phase 6: progress also carries the sessions fetched and the
+    # moves found, for the web app's progress line.
+    assert job.progress == {"stage": "enriching", "done": 1, "total": 1, "sessions": 41, "movements": 1}
 
     async with db() as session:
         ticker = await ingestion.get_ticker(session, "COLD")
