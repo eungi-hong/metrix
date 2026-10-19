@@ -8,12 +8,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.errors import register_exception_handlers
-from app.api.middleware import InteractiveAttributionMiddleware
-from app.api.routes import admin, chat, conversations, health, jobs, tickers
+from app.api.middleware import InteractiveAttributionMiddleware, RequestContextMiddleware
+from app.api.routes import admin, chat, conversations, events, health, jobs, metrics, research, tickers, watchlists
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
 from app.core.redis import close_redis
 from app.db.session import dispose_engine
+from app.services import events as event_streams
 from app.services import spend
 
 logger = get_logger(__name__)
@@ -43,6 +44,7 @@ async def lifespan(app: FastAPI):
     )
     spend.warn_on_startup()
     yield
+    await event_streams.close_broker()
     await close_redis()
     await dispose_engine()
 
@@ -66,23 +68,39 @@ def create_app() -> FastAPI:
             allow_origins=cors_origins,
             allow_origin_regex=cors_origin_regex,
             allow_credentials=False,
-            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
             allow_headers=[
                 "Authorization",
                 "Content-Type",
                 "X-Exa-Api-Key",
                 "X-OpenAI-Api-Key",
+                "X-Request-ID",
+            ],
+            expose_headers=[
+                "ETag",
+                "X-Request-ID",
+                "Retry-After",
+                "X-RateLimit-Limit",
+                "X-RateLimit-Remaining",
+                "X-RateLimit-Reset",
+                "X-RateLimit-Scope",
             ],
             max_age=600,
         )
     app.add_middleware(InteractiveAttributionMiddleware)
+    # Outermost, so the id and the latency cover everything, CORS included.
+    app.add_middleware(RequestContextMiddleware)
     register_exception_handlers(app)
     app.include_router(health.router)
     app.include_router(tickers.router)
+    app.include_router(research.router)
+    app.include_router(watchlists.router)
     app.include_router(chat.router)
     app.include_router(conversations.router)
     app.include_router(jobs.router)
+    app.include_router(events.router)
     app.include_router(admin.router)
+    app.include_router(metrics.router)
     return app
 
 

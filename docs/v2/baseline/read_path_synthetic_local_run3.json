@@ -1,0 +1,101 @@
+{
+  "provenance": {
+    "label": "synthetic-local",
+    "what": "GET /tickers/{symbol} on a warm, synthetic, local database; client and server on the same machine",
+    "generated_at": "2026-10-18T09:32:20+00:00",
+    "git_commit": "ac9d3e8c0a47ecb600ee4927f78ce4d9b4961763",
+    "git_dirty": false,
+    "command": "python scripts/bench_read_path.py run --base-url http://127.0.0.1:8000 --json-out docs/v2/baseline/read_path_synthetic_local_run3.json",
+    "server_environment": "docs/v2/BASELINE.md, and this script's docstring",
+    "base_url": "http://127.0.0.1:8000",
+    "symbol": "NVDA",
+    "requests_per_series": 500,
+    "warmup_requests_per_series": 50,
+    "python": "3.13.16",
+    "httpx": "0.28.1",
+    "os": "Linux-6.18.44-fc-v139-x86_64-with-glibc2.39",
+    "cpu_model": "Intel(R) Xeon(R) Processor @ 2.80GHz",
+    "cpu_count": 2
+  },
+  "payloads": [
+    {
+      "shape": "default",
+      "params": {},
+      "status_code": 200,
+      "body_bytes": 44849,
+      "movements_total": 28,
+      "movements_returned": 28,
+      "links_returned": 84,
+      "price_bars_returned": 0,
+      "ratelimit_limit": "1000000"
+    },
+    {
+      "shape": "frontend",
+      "params": {
+        "include_prices": "true",
+        "limit": "50"
+      },
+      "status_code": 200,
+      "body_bytes": 76142,
+      "movements_total": 28,
+      "movements_returned": 28,
+      "links_returned": 84,
+      "price_bars_returned": 262,
+      "ratelimit_limit": "1000000"
+    }
+  ],
+  "results": [
+    {
+      "shape": "default",
+      "concurrency": 1,
+      "requests": 500,
+      "errors": 0,
+      "p50_ms": 37.75,
+      "p95_ms": 47.31,
+      "p99_ms": 53.82,
+      "mean_ms": 37.93,
+      "max_ms": 307.0,
+      "throughput_rps": 26.4,
+      "response_bytes": 44849
+    },
+    {
+      "shape": "default",
+      "concurrency": 8,
+      "requests": 500,
+      "errors": 0,
+      "p50_ms": 217.33,
+      "p95_ms": 331.74,
+      "p99_ms": 468.51,
+      "mean_ms": 231.26,
+      "max_ms": 564.02,
+      "throughput_rps": 34.3,
+      "response_bytes": 44849
+    },
+    {
+      "shape": "frontend",
+      "concurrency": 1,
+      "requests": 500,
+      "errors": 0,
+      "p50_ms": 42.96,
+      "p95_ms": 63.55,
+      "p99_ms": 72.78,
+      "mean_ms": 48.28,
+      "max_ms": 338.72,
+      "throughput_rps": 20.7,
+      "response_bytes": 76142
+    },
+    {
+      "shape": "frontend",
+      "concurrency": 8,
+      "requests": 500,
+      "errors": 0,
+      "p50_ms": 292.94,
+      "p95_ms": 625.94,
+      "p99_ms": 722.11,
+      "mean_ms": 336.26,
+      "max_ms": 797.75,
+      "throughput_rps": 23.6,
+      "response_bytes": 76142
+    }
+  ]
+}

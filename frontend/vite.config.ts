@@ -17,10 +17,13 @@ export default defineConfig(({ mode }) => {
   requireApiBaseUrl(mode, loadEnv(mode, ".", "VITE_"));
   return {
     plugins: [react()],
+    // The methodology page imports the committed evaluation results (../evals).
+    server: { fs: { allow: [".."] } },
     test: {
       environment: "jsdom",
       setupFiles: ["./src/test/setup.ts"],
       css: true,
+      include: ["src/**/*.test.{ts,tsx}"],
     },
   };
 });

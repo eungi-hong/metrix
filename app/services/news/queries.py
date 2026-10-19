@@ -33,12 +33,19 @@ from datetime import date, datetime, time, timedelta, timezone
 
 from app.core.config import settings
 from app.models.enums import RelevanceTier
+from app.services import sessions
 from app.services.news.base import NewsSearchRequest, window_closes_at
 from app.services.peers import PeerSet
 
 SEARCH_TIER_EASY = "easy"
 SEARCH_TIER_MEDIUM = "medium"
 SEARCH_TIER_HARD = "hard"
+
+# NEWS_WINDOW_MODE values. A movement records the one it was first searched
+# with (`Movement.news_window_mode`); None is a movement from before the
+# setting existed, which was searched in calendar days.
+WINDOW_CALENDAR = "calendar"
+WINDOW_SESSIONS = "sessions"
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +59,7 @@ class MovementContext:
     movement_date: date
     daily_return: float
     direction: str
+    window_mode: str | None = None
 
     @property
     def display_name(self) -> str:
@@ -68,13 +76,27 @@ class MovementContext:
         )
 
 
-def search_window(movement_date: date) -> tuple[datetime, datetime]:
+def search_window(movement_date: date, mode: str | None = None) -> tuple[datetime, datetime]:
     """The published-date range searched for a movement.
 
-    Opens a few days early because the news that moves a stock frequently
+    Opens before the move because the news that moves a stock frequently
     breaks before the session it moves in (an overnight filing, a weekend
-    report), and closes a day late to catch same-evening follow-ups.
+    report), and closes after it to catch same-evening follow-ups.
+
+    In calendar mode (the v1 window, and the default) that is
+    NEWS_WINDOW_DAYS_BEFORE and NEWS_WINDOW_DAYS_AFTER whole UTC days. In
+    sessions mode it is XNYS sessions (`sessions.session_window`), so a
+    Friday move's window runs through Monday rather than ending on Saturday;
+    a date that is not a session falls back to calendar days.
     """
+    if mode == WINDOW_SESSIONS:
+        window = sessions.session_window(
+            movement_date,
+            settings.news_window_sessions_before,
+            settings.news_window_sessions_after,
+        )
+        if window is not None:
+            return window
     start = movement_date - timedelta(days=settings.news_window_days_before)
     end = movement_date + timedelta(days=settings.news_window_days_after)
     return (
@@ -83,9 +105,9 @@ def search_window(movement_date: date) -> tuple[datetime, datetime]:
     )
 
 
-def news_window_closes_at(movement_date: date) -> datetime:
+def news_window_closes_at(movement_date: date, mode: str | None = None) -> datetime:
     """When a movement's news window closes and its enrichment becomes final."""
-    _, end = search_window(movement_date)
+    _, end = search_window(movement_date, mode)
     return window_closes_at(end)
 
 
@@ -93,7 +115,7 @@ def build_tier_queries(
     context: MovementContext, peers: PeerSet
 ) -> list[tuple[str, NewsSearchRequest]]:
     """`(search_tier, request)` pairs for one movement, in tier order."""
-    start, end = search_window(context.movement_date)
+    start, end = search_window(context.movement_date, context.window_mode)
     num = settings.max_candidates_per_tier
     company_summary = (
         f"Does this article explain why {context.display_name} stock moved "
@@ -117,18 +139,25 @@ def build_tier_queries(
     if medium:
         queries.append((SEARCH_TIER_MEDIUM, request(medium, company_summary)))
 
-    queries.append((SEARCH_TIER_HARD, hard_tier_request(context.sector, context.movement_date)))
+    queries.append(
+        (
+            SEARCH_TIER_HARD,
+            hard_tier_request(context.sector, context.movement_date, context.window_mode),
+        )
+    )
     return queries
 
 
-def hard_tier_request(sector: str | None, movement_date: date) -> NewsSearchRequest:
+def hard_tier_request(
+    sector: str | None, movement_date: date, mode: str | None = None
+) -> NewsSearchRequest:
     """The Hard-tier search for any movement in `sector` on `movement_date`.
 
     A function of sector and date alone -- that is what lets every ticker in
     the sector share its cache row, and what lets the nightly run's
     `prewarm_sector_macro` job warm that row before any movement asks for it.
     """
-    start, end = search_window(movement_date)
+    start, end = search_window(movement_date, mode)
     sector = sector or HARD_TIER_DEFAULT_SECTOR
     return NewsSearchRequest(
         query=_hard_query(sector),

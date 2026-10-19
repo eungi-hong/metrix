@@ -44,6 +44,36 @@ class PlanLimits(BaseModel):
 
 # Starting points, meant to be tuned. Anonymous callers (AUTH_REQUIRED=false)
 # get the least, and cannot force refreshes or run work inline.
+# PROVISIONAL. The yfinance `sector` and `industry` strings a ticker's
+# benchmark is chosen by, mapped to SPDR Select Sector ETFs (and a few
+# industry ETFs). These keys are the strings the v2 brief lists; they have not
+# yet been checked against real yfinance responses. tests/test_benchmarks.py
+# fails loudly on any real profile string in tests/fixtures/
+# yfinance_profiles.json that has no entry here, so verifying them is a matter
+# of dropping that file in. Override with BENCHMARK_SECTOR_MAP_JSON and
+# BENCHMARK_INDUSTRY_MAP_JSON (for example an equal-weight sector ETF, to
+# avoid a large constituent leaking into its own sector factor).
+PROVISIONAL_SECTOR_BENCHMARKS: dict[str, str] = {
+    "Technology": "XLK",
+    "Healthcare": "XLV",
+    "Financial Services": "XLF",
+    "Consumer Cyclical": "XLY",
+    "Consumer Defensive": "XLP",
+    "Communication Services": "XLC",
+    "Industrials": "XLI",
+    "Energy": "XLE",
+    "Utilities": "XLU",
+    "Real Estate": "XLRE",
+    "Basic Materials": "XLB",
+}
+PROVISIONAL_INDUSTRY_BENCHMARKS: dict[str, str] = {
+    "Semiconductors": "SMH",
+    "Biotechnology": "XBI",
+    "Banks - Regional": "KRE",
+    "Residential Construction": "ITB",
+}
+
+
 DEFAULT_PLAN_LIMITS: dict[str, PlanLimits] = {
     "anonymous": PlanLimits(
         requests_per_minute=30, chat_per_minute=2, chat_per_day=10,
@@ -123,7 +153,18 @@ class Settings(BaseSettings):
 
     # -------------------------------------------------------------- ingestion
     price_history_days: int = Field(
-        default=365, ge=30, description="Default trailing window of prices to pull."
+        default=365,
+        ge=30,
+        description="Calendar days of the display window: movements are flagged, "
+        "and so enriched, only inside it. Prices are fetched further back, by "
+        "PRICE_ESTIMATION_EXTRA_DAYS, for the decomposition's estimation window.",
+    )
+    price_estimation_extra_days: int = Field(
+        default=200,
+        ge=0,
+        description="Calendar days of prices fetched before the display window, "
+        "so the earliest displayed movement has a full estimation window. Never "
+        "flagged or enriched.",
     )
     price_batch_size: int = Field(
         default=100,
@@ -388,6 +429,44 @@ class Settings(BaseSettings):
         description="Required in the X-Admin-Token header by /admin endpoints, "
         "which are disabled while it is unset.",
     )
+    response_cache_enabled: bool = Field(
+        default=True,
+        description="Keep built GET /tickers/{symbol} responses in Redis, keyed by their "
+        "ETag. A no-op without Redis.",
+    )
+    response_cache_ttl_seconds: int = Field(default=300, ge=1, le=86_400)
+    response_cache_max_bytes: int = Field(
+        default=2_000_000, ge=1_000, description="Larger responses are not cached."
+    )
+    http_cache_max_age_seconds: int = Field(
+        default=60, ge=0, description="Cache-Control max-age on settled ticker responses."
+    )
+    http_cache_stale_seconds: int = Field(
+        default=300, ge=0, description="Cache-Control stale-while-revalidate on settled ticker responses."
+    )
+    prewarm_peer_symbols_max: int = Field(
+        default=60,
+        ge=0,
+        description="Peers of the nightly universe whose prices (only) the first chunk "
+        "also refreshes, for the case file's peer returns. 0 turns it off.",
+    )
+    sse_heartbeat_seconds: float = Field(default=15.0, gt=0, description="Comment line this often on /events.")
+    sse_max_seconds: float = Field(
+        default=300.0, gt=0, description="An /events stream ends after this long; the client reconnects."
+    )
+    sse_poll_seconds: float = Field(
+        default=2.0, gt=0, description="/events polling interval when Postgres LISTEN is unavailable."
+    )
+    sse_retry_ms: int = Field(default=3000, ge=0, description="The reconnect delay /events suggests.")
+    sse_queue_size: int = Field(default=100, ge=1, description="Events buffered per stream; the oldest drop.")
+    sse_max_connections: int = Field(
+        default=500, ge=1, description="Open /events streams per process; more get 503."
+    )
+    metrics_token: str | None = Field(
+        default=None,
+        description="Bearer token (or X-Metrics-Token) for GET /metrics, which is "
+        "disabled (404) while it is unset.",
+    )
 
     # -------------------------------------------------------- rate limits
     # Account-wide: shared through Redis by the API and every worker.
@@ -559,17 +638,185 @@ class Settings(BaseSettings):
         ),
     )
 
-    # ------------------------------------------------------------------ chat
-    chat_max_movements_in_context: int = Field(default=12, ge=1)
-    chat_max_articles_per_movement: int = Field(default=4, ge=1)
-    chat_max_history_messages: int = Field(default=20, ge=2)
-    chat_max_movement_summaries: int = Field(
-        default=60,
-        ge=1,
-        description="One-line movement summaries placed in the prompt. Cheap "
-        "enough to include every movement, so date-specific questions can be "
-        "answered even when that day is not among the most significant.",
+    # ------------------------------------------- detection modes (README)
+    movement_detection_mode: Literal["raw", "abnormal", "union"] = Field(
+        default="raw",
+        description="raw: |r| >= max(floor, k * sigma) on the stock alone. "
+        "abnormal: |SAR| >= MOVEMENT_ABNORMAL_K and |r| >= the floor. union: "
+        "either. Union adds movements, and every new movement is enrichment "
+        "spend: measure it with scripts/measure_detection.py before switching.",
     )
+    movement_abnormal_k: float = Field(
+        default=2.5,
+        gt=0,
+        description="Standardised abnormal return a day must reach to be flagged "
+        "in abnormal or union mode. A heuristic size, not a p-value.",
+    )
+    movement_abnormal_floor_basis: Literal["return", "abnormal"] = Field(
+        default="return",
+        description="What MOVEMENT_FLOOR_PCT applies to in the abnormal test: the "
+        "day's return (as the v2 brief specifies), or its abnormal return. Only "
+        "'abnormal' can flag a stock that was flat on a day its sector fell 4%.",
+    )
+
+    # --------------------------------------------- return decomposition
+    decomposition_estimation_sessions: int = Field(
+        default=120,
+        ge=10,
+        description="Sessions in the estimation window, which ends the session "
+        "before the move.",
+    )
+    decomposition_min_sessions: int = Field(
+        default=60,
+        ge=10,
+        description="Fewer sessions than this before a move and it is not "
+        "decomposed (raw detection, with a warning on the movement).",
+    )
+    decomposition_winsor_z: float = Field(
+        default=5.0,
+        ge=0,
+        description="Estimation-window returns are clipped at this many robust "
+        "standard deviations from the median, so earlier shocks do not inflate "
+        "sigma_e. 0 turns it off.",
+    )
+    benchmark_market_symbol: str = Field(
+        default="SPY", description="The market factor's benchmark."
+    )
+    benchmark_sector_map_json: Annotated[dict[str, str], NoDecode] = Field(
+        default_factory=lambda: dict(PROVISIONAL_SECTOR_BENCHMARKS),
+        description="JSON map of yfinance sector string to benchmark symbol. "
+        "Replaces the provisional default whole. An unmapped sector falls back "
+        "to a market-only model.",
+    )
+    benchmark_industry_map_json: Annotated[dict[str, str], NoDecode] = Field(
+        default_factory=lambda: dict(PROVISIONAL_INDUSTRY_BENCHMARKS),
+        description="JSON map of yfinance industry string to benchmark symbol. "
+        "Takes precedence over the sector map.",
+    )
+
+    # --------------------------------------------- per-movement analytics
+    rvol_lookback_sessions: int = Field(
+        default=20,
+        ge=2,
+        description="Relative volume is the day's volume over the median of "
+        "this many sessions before it.",
+    )
+    drift_label_fraction: float = Field(
+        default=0.5,
+        gt=0,
+        description="Post-move drift is labelled continued or reversed once it "
+        "is at least this fraction of the day's abnormal return, held otherwise.",
+    )
+    regime_window_sessions: int = Field(
+        default=20,
+        ge=2,
+        description="Sessions of returns in the realised-volatility measure.",
+    )
+    regime_lookback_sessions: int = Field(
+        default=252,
+        ge=2,
+        description="Sessions of history the volatility percentile is ranked over.",
+    )
+
+    # ---------------------------------------- session-based news windows
+    news_window_mode: Literal["calendar", "sessions"] = Field(
+        default="calendar",
+        description="calendar: NEWS_WINDOW_DAYS_BEFORE/AFTER calendar days (v1). "
+        "sessions: NEWS_WINDOW_SESSIONS_BEFORE/AFTER XNYS sessions. Applies to "
+        "movements not yet enriched; enriched ones keep the window they were "
+        "searched with, so their cached searches still match. Changing it "
+        "changes the news search requests, so new movements miss the cache once.",
+    )
+    news_window_sessions_before: int = Field(
+        default=2,
+        ge=0,
+        description="Sessions before the move covered, from the close before the first of them.",
+    )
+    news_window_sessions_after: int = Field(
+        default=1,
+        ge=0,
+        description="Sessions after the move covered, through their after-hours.",
+    )
+
+    # ------------------------------------------------------------- scorer v2
+    relevance_scorer_version: Literal["v1", "v2"] = Field(
+        default="v1",
+        description="v1: the original scorer. v2: adds the decomposition, session legs, "
+        "each candidate's timing bucket, filings as candidates, source quality, a role "
+        "per link and a movement-level abstain. v2 becomes the default only once "
+        "docs/EVALUATION.md shows it is better.",
+    )
+    relevance_snippet_chars: int = Field(
+        default=1200,
+        ge=200,
+        description="Characters of each candidate's summary or text shown to scorer v2 "
+        "(Exa already returns them; no extra call).",
+    )
+    source_primary_domains: str = Field(
+        default="sec.gov,businesswire.com,prnewswire.com,globenewswire.com,accesswire.com",
+        description="Comma-separated domains scorer v2 is told are primary sources "
+        "(filings and wire releases). Hosts starting 'ir.' or 'investor' count too.",
+    )
+    source_tier1_domains: str = Field(
+        default="reuters.com,bloomberg.com,wsj.com,ft.com,cnbc.com,apnews.com,nytimes.com,barrons.com,marketwatch.com",
+        description="Comma-separated domains scorer v2 is told are tier-1 newsrooms.",
+    )
+
+    # ------------------------------------------------------------ SEC EDGAR
+    sec_edgar_enabled: bool = Field(
+        default=False,
+        description="Fetch filings from SEC EDGAR. Requires SEC_USER_AGENT.",
+    )
+    sec_user_agent: str | None = Field(
+        default=None,
+        description="SEC fair access: a name and contact email, e.g. 'Metrix research "
+        "demo you@example.com'. Required whenever EDGAR is enabled.",
+    )
+    sec_max_rps: float = Field(
+        default=5.0,
+        gt=0,
+        le=10,
+        description="EDGAR requests per second across every process; the SEC allows 10.",
+    )
+    sec_acceptance_timezone: str = Field(
+        default="America/New_York",
+        description="Time zone EDGAR's acceptanceDateTime is read in. It carries a "
+        "trailing Z but appears to be New York wall time (an after-close earnings "
+        "8-K reads 16:20). UNVERIFIED in this repository until checked against a "
+        "real filing: see docs/EVALUATION.md.",
+    )
+    sec_http_timeout_seconds: float = Field(default=20.0, gt=0, description="Per-request timeout.")
+    sec_max_response_bytes: int = Field(
+        default=20_000_000,
+        gt=0,
+        description="Larger EDGAR responses are refused rather than read.",
+    )
+    sec_submissions_ttl_hours: int = Field(
+        default=12,
+        ge=1,
+        description="How long a company's filing list is cached; new filings appear in it.",
+    )
+    sec_company_tickers_ttl_days: int = Field(
+        default=7, ge=1, description="How long the ticker-to-CIK map is cached."
+    )
+
+    # ------------------------------------------------------------------ chat
+    chat_max_tool_calls: int = Field(
+        default=5, ge=0, le=10, description="Tool calls Ask Metrix may make per question."
+    )
+    chat_turn_token_budget: int = Field(
+        default=40_000,
+        ge=2_000,
+        description="Input plus output tokens one question may use across its model calls. "
+        "Past it, the model answers with what it has, without more tools.",
+    )
+    chat_history_token_budget: int = Field(
+        default=3_000,
+        ge=0,
+        description="Earlier questions and answers replayed into a turn, newest first, up to "
+        "about this many tokens (4 characters each).",
+    )
+    chat_max_output_tokens: int = Field(default=1_200, ge=100, description="Per model call.")
 
     @model_validator(mode="after")
     def _check_worker_settings(self) -> "Settings":
@@ -651,6 +898,56 @@ class Settings(BaseSettings):
                 )
                 raise ValueError(f"PLAN_LIMITS_JSON entry for '{plan}': {problems}") from exc
         return limits
+
+    @field_validator("benchmark_sector_map_json", "benchmark_industry_map_json", mode="before")
+    @classmethod
+    def _parse_benchmark_map(cls, v: Any, info: Any) -> Any:
+        name = info.field_name.upper()
+        if not isinstance(v, str):
+            return v
+        if not v.strip():
+            return dict(
+                PROVISIONAL_SECTOR_BENCHMARKS
+                if info.field_name == "benchmark_sector_map_json"
+                else PROVISIONAL_INDUSTRY_BENCHMARKS
+            )
+        try:
+            raw = json.loads(v)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{name} is not valid JSON: {exc}") from exc
+        if not isinstance(raw, dict) or not all(
+            isinstance(key, str) and isinstance(value, str) and value.strip()
+            for key, value in raw.items()
+        ):
+            raise ValueError(f"{name} must be a JSON object of string to symbol")
+        return {key: value.strip().upper() for key, value in raw.items()}
+
+    @model_validator(mode="after")
+    def _check_sec_settings(self) -> "Settings":
+        if self.sec_edgar_enabled and not (self.sec_user_agent or "").strip():
+            raise ValueError(
+                "SEC_USER_AGENT is required when SEC_EDGAR_ENABLED is true: the SEC asks "
+                "every client to name itself and give a contact."
+            )
+        try:
+            ZoneInfo(self.sec_acceptance_timezone)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"SEC_ACCEPTANCE_TIMEZONE '{self.sec_acceptance_timezone}' is unknown") from exc
+        return self
+
+    @model_validator(mode="after")
+    def _check_decomposition_window(self) -> "Settings":
+        if self.decomposition_min_sessions > self.decomposition_estimation_sessions:
+            raise ValueError(
+                "DECOMPOSITION_MIN_SESSIONS cannot exceed DECOMPOSITION_ESTIMATION_SESSIONS."
+            )
+        return self
+
+    @property
+    def price_fetch_days(self) -> int:
+        """Calendar days of prices a full fetch asks for: the display window
+        plus the estimation history before it."""
+        return self.price_history_days + self.price_estimation_extra_days
 
     @field_validator("daily_spend_cap_usd", mode="before")
     @classmethod

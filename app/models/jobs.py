@@ -28,6 +28,9 @@ class JobKind(StrEnum):
     ENRICH_MOVEMENT = "enrich_movement"
     SCHEDULE_NIGHTLY = "schedule_nightly"
     REFRESH_SYMBOL_DIRECTORY = "refresh_symbol_directory"
+    # Decomposition and analytics for one ticker's stored movements; no news,
+    # no LLM. Fits job_kind's VARCHAR(32), so no migration.
+    BACKFILL_ANALYTICS = "backfill_analytics"
 
 
 class JobStatus(StrEnum):

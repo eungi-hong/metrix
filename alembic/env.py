@@ -25,6 +25,28 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
+# Postgres-only search indexes (f3c9a7d1e5b2, b7e3f1a9c5d2), some created only where the
+# database allows the pg_trgm extension; they are not on the models, so the
+# drift check must not count them.
+OPTIONAL_INDEXES = frozenset(
+    {
+        "ix_listed_symbols_name_trgm",
+        "ix_tickers_company_name_trgm",
+        "ix_listed_symbols_symbol_pattern",
+        "ix_news_articles_search",
+    }
+)
+# Postgres-only generated columns (b7e3f1a9c5d2), also not on the models.
+OPTIONAL_COLUMNS = frozenset({("news_articles", "search_vector")})
+
+
+def include_object(obj, name, type_, reflected, compare_to) -> bool:
+    if type_ == "index" and name in OPTIONAL_INDEXES:
+        return False
+    if type_ == "column" and (getattr(obj.table, "name", None), name) in OPTIONAL_COLUMNS:
+        return False
+    return True
+
 
 def run_migrations_offline() -> None:
     context.configure(
@@ -33,6 +55,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -40,7 +63,8 @@ def run_migrations_offline() -> None:
 
 def _do_run_migrations(connection) -> None:
     context.configure(
-        connection=connection, target_metadata=target_metadata, compare_type=True
+        connection=connection, target_metadata=target_metadata, compare_type=True,
+        include_object=include_object,
     )
     with context.begin_transaction():
         context.run_migrations()

@@ -1,0 +1,76 @@
+/*
+ * Metrix design tokens. The chrome is ink on paper; colour is reserved for
+ * data: up, down, and the three parts of a move (market, sector, company).
+ * Values and contrast ratios: the v2 design research, section 3.4.
+ * Light by default; dark follows the system unless the viewer picks a theme
+ * ([data-theme] on <html>, set by the theme toggle).
+ */
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f0f2f5;
+  --border: #e3e6eb;
+  --border-strong: #5b6472;
+  --text: #0b0d10;
+  --text-muted: #5b6472;
+  --accent: #0b0d10;
+  --accent-contrast: #ffffff;
+  --up: #047857;
+  --down: #c0392b;
+  --up-soft: #e7f5ee;
+  --down-soft: #fbeae8;
+  --c-market: #0072b2;
+  --c-sector: #a86b00;
+  --c-company: #9c4a82;
+  --warn-soft: #fdf3e1;
+  --shadow-pop: 0 12px 32px rgba(11, 13, 16, 0.14), 0 2px 6px rgba(11, 13, 16, 0.06);
+  --radius-control: 6px;
+  --radius-card: 10px;
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --bg: #0b0d10;
+  --surface: #14171c;
+  --surface-2: #1b1f26;
+  --border: #262b33;
+  --border-strong: #9aa3af;
+  --text: #e8eaed;
+  --text-muted: #9aa3af;
+  --accent: #e8eaed;
+  --accent-contrast: #0b0d10;
+  --up: #34d399;
+  --down: #f87171;
+  --up-soft: #0f2a20;
+  --down-soft: #2e1414;
+  --c-market: #56b4e9;
+  --c-sector: #e69f00;
+  --c-company: #cc79a7;
+  --warn-soft: #2b2312;
+  --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.4);
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0b0d10;
+    --surface: #14171c;
+    --surface-2: #1b1f26;
+    --border: #262b33;
+    --border-strong: #9aa3af;
+    --text: #e8eaed;
+    --text-muted: #9aa3af;
+    --accent: #e8eaed;
+    --accent-contrast: #0b0d10;
+    --up: #34d399;
+    --down: #f87171;
+    --up-soft: #0f2a20;
+    --down-soft: #2e1414;
+    --c-market: #56b4e9;
+    --c-sector: #e69f00;
+    --c-company: #cc79a7;
+    --warn-soft: #2b2312;
+    --shadow-pop: 0 12px 32px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.4);
+    color-scheme: dark;
+  }
+}

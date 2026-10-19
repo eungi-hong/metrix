@@ -52,6 +52,19 @@ class Ticker(Base, TimestampMixin):
     )
     last_ingested_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
     ingest_started_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # A market or sector benchmark (SPY, XLK). Its prices are refreshed every
+    # night as data for the decomposition; it is not ranked by demand or
+    # enriched by the nightly run. A user can still ask for it as a ticker.
+    is_benchmark: Mapped[bool] = mapped_column(
+        sa.Boolean, default=False, server_default=sa.false(), nullable=False
+    )
+    # SEC Central Index Key, looked up once when EDGAR is enabled.
+    cik: Mapped[int | None] = mapped_column(sa.Integer)
+    # Incremented by every committed write that changes what the API shows for
+    # this ticker (app.db.versions); keys the read path's ETag and cache.
+    data_version: Mapped[int] = mapped_column(
+        sa.BigInteger, default=0, server_default="0", nullable=False
+    )
 
     prices: Mapped[list["PriceBar"]] = relationship(
         back_populates="ticker", cascade="all, delete-orphan", lazy="noload"
@@ -148,10 +161,61 @@ class Movement(Base, TimestampMixin):
     news_attempts: Mapped[int] = mapped_column(
         sa.Integer, default=0, server_default="0", nullable=False
     )
+    # "calendar" or "sessions" (NEWS_WINDOW_MODE): fixed once the movement is
+    # first enriched, so a re-enrichment repeats the same, cached, searches.
+    # NULL is a movement enriched before the setting existed: calendar.
+    news_window_mode: Mapped[str | None] = mapped_column(sa.String(16))
+
+    # --- detection modes (app.services.detection) ---
+    # Which test the day passed: raw, abnormal or both. NULL predates v2: raw.
+    trigger: Mapped[str | None] = mapped_column(sa.String(16))
+    # False for a stored movement that no longer clears the threshold but has
+    # links or a completed enrichment: paid work is kept, and hidden, rather
+    # than deleted. A movement with neither is deleted instead.
+    qualifies: Mapped[bool] = mapped_column(
+        sa.Boolean, default=True, server_default=sa.true(), nullable=False
+    )
+
+    # --- return decomposition (app.services.decomposition); NULL when the day
+    # could not be decomposed, with the reason in decomposition_warning ---
+    decomposition_model: Mapped[str | None] = mapped_column(sa.String(16))
+    market_benchmark: Mapped[str | None] = mapped_column(sa.String(16))
+    sector_benchmark: Mapped[str | None] = mapped_column(sa.String(16))
+    estimation_sessions: Mapped[int | None] = mapped_column(sa.Integer)
+    alpha: Mapped[float | None] = mapped_column(sa.Float)
+    beta_market: Mapped[float | None] = mapped_column(sa.Float)
+    beta_sector: Mapped[float | None] = mapped_column(sa.Float)
+    r_squared: Mapped[float | None] = mapped_column(sa.Float)
+    sigma_e: Mapped[float | None] = mapped_column(sa.Float)
+    market_component: Mapped[float | None] = mapped_column(sa.Float)
+    sector_component: Mapped[float | None] = mapped_column(sa.Float)
+    expected_return: Mapped[float | None] = mapped_column(sa.Float)
+    abnormal_return: Mapped[float | None] = mapped_column(sa.Float)
+    sar: Mapped[float | None] = mapped_column(sa.Float)
+    dominant_component: Mapped[str | None] = mapped_column(sa.String(16))
+    decomposition_warning: Mapped[str | None] = mapped_column(sa.Text)
+
+    # --- per-movement analytics (app.services.analytics) ---
+    gap_return: Mapped[float | None] = mapped_column(sa.Float)
+    intraday_return: Mapped[float | None] = mapped_column(sa.Float)
+    relative_volume: Mapped[float | None] = mapped_column(sa.Float)
+    car_5: Mapped[float | None] = mapped_column(sa.Float)
+    car_20: Mapped[float | None] = mapped_column(sa.Float)
+    drift_5_label: Mapped[str | None] = mapped_column(sa.String(16))
+    drift_20_label: Mapped[str | None] = mapped_column(sa.String(16))
+    realized_vol: Mapped[float | None] = mapped_column(sa.Float)
+    realized_vol_percentile: Mapped[float | None] = mapped_column(sa.Float)
+    analytics_computed_at: Mapped[datetime | None] = mapped_column(sa.DateTime(timezone=True))
+    # Scorer v2 may say nothing explains the move; why, in a sentence.
+    evidence_abstained: Mapped[bool | None] = mapped_column(sa.Boolean)
+    abstain_reason: Mapped[str | None] = mapped_column(sa.Text)
 
     ticker: Mapped[Ticker] = relationship(back_populates="movements", lazy="noload")
     news_links: Mapped[list["MovementNewsLink"]] = relationship(
         back_populates="movement", cascade="all, delete-orphan", lazy="noload"
+    )
+    filings: Mapped[list["MovementFiling"]] = relationship(  # noqa: F821
+        cascade="all, delete-orphan", lazy="noload", viewonly=False
     )
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid

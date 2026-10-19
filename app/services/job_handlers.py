@@ -162,6 +162,9 @@ async def handle_refresh_prices(session: AsyncSession, job: Job, ctx: JobContext
         int(job.payload["run_id"]),
         now=ingestion._now(),
         progress=ctx.report_progress,
+        benchmark_symbols=job.payload.get("benchmarks"),
+        peer_symbols=job.payload.get("peers"),
+        trading_date=date.fromisoformat(job.payload["trading_date"]) if "trading_date" in job.payload else None,
     )
     await ctx.report_progress({"stage": "done", **asdict(outcome)})
 
@@ -176,9 +179,12 @@ async def handle_prewarm_sector_macro(
     """
     sector = job.payload.get("sector")
     movement_date = date.fromisoformat(job.payload["date"])
+    # The window the movements behind this job will be searched with; jobs
+    # queued before the setting existed carry none, which is calendar.
+    window_mode = job.payload.get("window_mode")
     provider = build_news_provider(session)
     try:
-        found = await provider.search(hard_tier_request(sector, movement_date))
+        found = await provider.search(hard_tier_request(sector, movement_date, window_mode))
     finally:
         await provider.aclose()
     await session.commit()
@@ -188,6 +194,18 @@ async def handle_prewarm_sector_macro(
         date=movement_date.isoformat(),
         articles=len(found),
     )
+
+
+async def handle_backfill_analytics(session: AsyncSession, job: Job, ctx: JobContext) -> None:
+    """Decomposition, legs, drift and regime for one ticker's stored movements,
+    and session timing for its links. No detection, news or LLM call."""
+    symbol = job.payload["symbol"]
+    ticker = await ingestion.get_ticker(session, symbol)
+    if ticker is None:
+        logger.info("backfill_ticker_gone", job_id=job.id, symbol=symbol)
+        return
+    result = await ingestion.backfill_analytics(session, ticker)
+    await ctx.report_progress(asdict(result))
 
 
 async def handle_refresh_symbol_directory(
@@ -209,4 +227,5 @@ HANDLERS: dict[JobKind, Handler] = {
     JobKind.REFRESH_PRICES: handle_refresh_prices,
     JobKind.PREWARM_SECTOR_MACRO: handle_prewarm_sector_macro,
     JobKind.REFRESH_SYMBOL_DIRECTORY: handle_refresh_symbol_directory,
+    JobKind.BACKFILL_ANALYTICS: handle_backfill_analytics,
 }

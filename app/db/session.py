@@ -29,6 +29,12 @@ SessionLocal: async_sessionmaker[AsyncSession] = async_sessionmaker(
 )
 
 
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    """FastAPI dependency: the factory itself, for work that outlives the
+    request's session (an event stream)."""
+    return SessionLocal
+
+
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI dependency: one session per request."""
     async with SessionLocal() as session:

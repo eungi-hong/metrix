@@ -248,6 +248,8 @@ async def test_concurrent_claim_is_granted_once(session_factory):
 
 
 async def test_chat_answers_from_stored_data_with_sources(client, stub_llm):
+    # Changed in v2 Phase 5: the model looks the data up with tools, labels are
+    # row ids (M<id>, A<id>), and only cited rows come back as sources.
     await client.get("/tickers/TEST", params={"wait": True})
 
     response = await client.post(
@@ -256,18 +258,21 @@ async def test_chat_answers_from_stored_data_with_sources(client, stub_llm):
     assert response.status_code == 200
 
     body = response.json()
-    assert body["ticker"] == "TEST"
-    assert body["grounded"] is True
-    assert body["answer"] == stub_llm.answer
+    assert body["ticker"] == "TEST" and body["grounded"] is True and body["answered_by"] == "model"
     assert body["conversation_id"]
+    (movement,) = body["sources"]["movements"]
+    (article,) = body["sources"]["articles"]
+    assert movement["ref"] == f"M{movement['movement_id']}" and movement["symbol"] == "TEST"
+    assert article["ref"] == f"A{article['article_id']}"
+    assert body["answer"] == stub_llm.tool_answer.format(M=movement["ref"], A=article["ref"])
+    assert [c["name"] for c in body["tool_calls"]] == ["get_movements"]
+    assert body["suggestions"] and all("TEST" in q for q in body["suggestions"])
 
-    assert [m["ref"] for m in body["sources"]["movements"]] == ["M1"]
-    assert body["sources"]["articles"][0]["ref"] == "A1"
-
-    # The prompt actually carried the retrieved data, not just the question.
-    prompt = stub_llm.complete_calls[-1]["messages"][-1]["content"]
-    assert "ALL MAJOR MOVEMENTS ON RECORD" in prompt
-    assert "[M1]" in prompt and "[A1]" in prompt
+    # The stable prompt is first; the question's specifics are in the user message.
+    first_call = stub_llm.tool_turn_calls[0]
+    assert "TEST" not in first_call["system"]
+    assert first_call["messages"][-1]["content"].startswith("TICKERS: TEST")
+    assert "get_movement_case" in first_call["tools"]
 
 
 async def test_chat_is_multi_turn(client, stub_llm):
@@ -288,10 +293,10 @@ async def test_chat_is_multi_turn(client, stub_llm):
     # The ticker carried over without being restated.
     assert body["ticker"] == "TEST"
 
-    replayed = stub_llm.complete_calls[-1]["messages"]
-    assert replayed[0]["content"] == "What was the biggest move?"
-    assert replayed[0]["role"] == "user"
-    assert len(replayed) > 1
+    replayed = stub_llm.tool_turn_calls[-2]["messages"]  # the second question's first model call
+    assert replayed[0] == {"role": "user", "content": "What was the biggest move?"}
+    assert replayed[1]["role"] == "assistant"
+    assert replayed[-1]["content"].endswith("QUESTION: And what caused it?")
 
 
 async def test_chat_infers_ticker_from_the_question(client):

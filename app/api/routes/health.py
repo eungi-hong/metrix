@@ -1,5 +1,10 @@
 """Liveness and readiness.
 
+`/health/live` says the process is serving (no dependencies checked), for a
+restart policy. `/health/ready` says it can do its job: 503 when Postgres is
+unreachable, 200 otherwise, since without Redis everything still works on
+per-process limits. `/health` is the detailed view for people.
+
 Postgres unreachable is "degraded" and the service can do little. Redis
 unreachable is also "degraded", but everything keeps working: limits fall
 back to per-process counters (`app.services.limits`).
@@ -8,7 +13,7 @@ back to per-process counters (`app.services.limits`).
 from __future__ import annotations
 
 import sqlalchemy as sa
-from fastapi import APIRouter
+from fastapi import APIRouter, Response
 
 from app.api.deps import SessionDep
 from app.core import redis
@@ -43,3 +48,22 @@ async def health(session: SessionDep) -> dict[str, object]:
             "floor_pct": settings.movement_floor_pct,
         },
     }
+
+
+@router.get("/health/live", summary="Liveness: the process is serving")
+async def live() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@router.get(
+    "/health/ready",
+    summary="Readiness: 200 when the database is reachable, else 503",
+    responses={503: {"description": "Postgres is unreachable"}},
+)
+async def ready(session: SessionDep, response: Response) -> dict[str, str]:
+    try:
+        await session.execute(sa.select(1))
+    except Exception:
+        response.status_code = 503
+        return {"status": "unavailable", "database": "unreachable"}
+    return {"status": "ok", "database": "ok", "redis": await redis.ping()}

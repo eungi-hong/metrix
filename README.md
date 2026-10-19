@@ -1,43 +1,148 @@
-# Metrix: Stock Movement News Explainer
+# Metrix: why did this stock move?
 
-Takes a ticker, finds the days it moved unusually far, and explains each one with the
-news that caused it — company news, competitor and industry news, and macro/political
-news — with an LLM deciding which articles actually explain the move and why.
+Metrix finds the days a US stock moved unusually far, splits each move into the
+part the market explains, the part its sector explains and the part that is the
+company's own, and then shows the evidence that explains the rest: the SEC filing,
+the news, and when each broke relative to the trading session. Every claim, in the
+case file and in Ask Metrix, links to the stored row it came from.
 
+![A case file: the breakdown, when the news broke, the primary filing and the evidence](docs/assets/after/case-1440.png)
+
+<sub>Screenshot from the web app's sample mode: fictional companies, outlets and
+prices, served by a mocked API (`VITE_MSW=1`). More in
+[`docs/assets/after/`](docs/assets/after), next to v1 in
+[`docs/assets/before/`](docs/assets/before).</sub>
+
+In 30 seconds:
+
+1. Open a ticker (`/t/NVDA`). The chart marks every flagged move, coloured by what
+   drove it; the table lists them with abnormal return, SAR, relative volume, driver
+   and top explanation.
+2. Open a move (`/t/NVDA/m/2026-06-05`). The case file says how much of it was
+   market, sector and company in percentage points, places each article and 8-K on
+   the session timeline (prior close, overnight, open, session, after close), and
+   says why the move was flagged.
+3. Ask a question ("Did AMD and NVDA fall for the same reason?"). Ask Metrix looks
+   up stored moves, evidence and filings with read-only tools, streams its answer,
+   and cites each claim; citations it cannot back are removed before you see them.
+
+**Live demo:** <https://metrix-jet.vercel.app/> (API on Railway). It serves v1 until
+this v2 stack is merged and deployed ([docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)).
+Showcase case files (one company-driven, one sector-driven, one macro-driven) will
+be linked here once they are verified by hand on the live site after the v2
+backfill.
+
+## What's new in v2
+
+Every number below is synthetic-local (one machine, synthetic data, a fake model)
+unless it says otherwise; [docs/v2/RESULTS.md](docs/v2/RESULTS.md) has the command
+behind each one, and the numbers that still need real data.
+
+- **Reads that survive a spike.** A warm `GET /tickers/{symbol}` went from 490 ms
+  to 16 ms median at 50 users; at 150 users v1 failed 3.2% of reads with a 28 s p95,
+  v2 failed none with a 360 ms p95 ([docs/PERFORMANCE.md](docs/PERFORMANCE.md)).
+- **Every move decomposed.** Market, sector and company parts in percentage points
+  that add up exactly (to 1e-15), from a market model with an orthogonalised sector
+  factor, with the Patell SAR and the session timing of every piece of evidence.
+- **SEC filings as primary evidence.** 8-Ks from EDGAR are attached to the move
+  they explain, with their items and acceptance time; earnings releases (8-K Item
+  2.02) give each ticker an earnings history.
+- **Ask Metrix 2.0.** A bounded tool loop (at most 5 lookups) over stored data,
+  streamed, with checked citations. On an 18-question set its database fallback
+  scores citation precision 1.000 with 0 uncited and 0 mismatched numbers; the
+  model's own numbers are pending one budgeted run.
+- **A research web app.** Every view has a URL; live progress replaces the spinner.
+  Lighthouse (desktop, local) performance 97 to 99 and accessibility 100; the entry
+  bundle went from 170 kB to 109 kB gzipped; 19 browser tests including axe and
+  390 px layouts. Backend tests went from 575 to 879.
+
+## How it fits together
+
+```mermaid
+flowchart LR
+  web["Web app<br/>(React, Vercel)"] -- "REST, SSE" --> api["API<br/>(FastAPI)"]
+  api --> pg[("Postgres<br/>data, job queue,<br/>full-text search")]
+  api --> redis[("Redis<br/>quotas, response cache")]
+  pg -- "LISTEN / NOTIFY" --> api
+  worker["Worker<br/>(nightly run, ingestion)"] --> pg
+  worker --> prices["yfinance<br/>prices"]
+  worker --> edgar["SEC EDGAR<br/>filings"]
+  worker --> exa["Exa<br/>news search"]
+  worker --> llm["LLM<br/>relevance scoring"]
+  api --> chat["LLM<br/>Ask Metrix tools"]
 ```
-GET    /tickers/{symbol}       stock + news data, nested movement → articles → tier + rationale
-POST   /chat                   grounded, multi-turn Q&A over that data, with citations
-GET    /conversations          your conversations; /conversations/{id} for one, with messages
-GET    /jobs/{id}              status, progress and errors of a queued background job
-GET    /health                 liveness and which integrations are configured
-POST   /admin/users            create a user; PATCH /admin/users/{id} to change plan or disable
-POST   /admin/users/{id}/keys  issue an API key; DELETE /admin/keys/{id} to revoke one
-POST   /admin/prewarm          start a pre-warm run now
-GET    /admin/queue            queue health and the last run
-GET    /admin/usage            the day's spend, by provider, operation and user
-GET    /admin/request-info     the peer and X-Forwarded-For as received, to set TRUSTED_PROXY_COUNT
-```
 
-The public browser demo uses an Exa + OpenAI provider-key pair or capped server-side
-demo access. `/admin` always requires `X-Admin-Token`. See [Authentication](#authentication).
+The API only reads and queues; the worker does every paid or slow call, inside a
+daily spend cap. Details under [Architecture](#architecture);
+[docs/EVALUATION.md](docs/EVALUATION.md) for how relevance is measured, and
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md) for the load test.
+
+## Five design decisions
+
+1. **Union detection, built but not yet the default.** A move is flagged by its raw
+   size against its own volatility, by its abnormal return (SAR) after the market
+   and sector are removed, or both, and every flag says which test fired. `raw`
+   stays the default until the extra enrichment cost of `union` is measured on real
+   prices; switching never deletes paid evidence.
+2. **An orthogonalised sector factor.** The sector ETF's return is regressed on the
+   market first, so "sector" means what the sector did beyond the market and the
+   three parts add up to the move instead of double counting.
+3. **EDGAR as the primary source.** A company's own 8-K, timed to the minute, is
+   better evidence than any article about it, so the case file shows the filing first
+   and scorer v2 takes filings as candidates marked as primary sources.
+4. **Postgres full-text search, not a vector database.** Ask Metrix searches a
+   weighted `tsvector` over titles, summaries and text: exact tickers and figures
+   matter more than paraphrase here, and it is one fewer service to run.
+5. **Server-sent events, not websockets.** Updates flow one way (job progress,
+   streamed answers), SSE goes through every proxy as plain HTTP, reconnects by
+   itself, and sits on Postgres `LISTEN` with a polling fallback.
+
+## Limitations, honestly
+
+- **Relevance quality is not yet measured.** The evaluation harness, scorer v2 and
+  the calibration report exist, but the labelled set is empty, so neither scorer
+  has an accuracy number yet; v2 stays off by default.
+- **Ask Metrix's model-written answers are unevaluated** beyond tests; only its
+  database fallback has numbers.
+- **The default detector is still `raw`** (see above), and the sector benchmark map
+  is provisional until checked against real profile strings.
+- **Filing acceptance times are read as New York time**, unverified against a live
+  filing.
+- **Share previews are client-side**: link unfurlers that do not run JavaScript see
+  the generic title.
+- **The numbers in "What's new" are synthetic-local**, not production.
 
 ---
 
-## Live demo
+## API at a glance
 
-**<https://metrix-jet.vercel.app/>** (the frontend; the API it calls is on Railway)
+```
+GET    /tickers/{symbol}                   prices, flagged moves and their evidence (ETag, 304)
+GET    /tickers/{symbol}/movements/{day}   one move's case file
+GET    /tickers/{symbol}/filings           stored SEC filings
+GET    /tickers/{symbol}/earnings          earnings releases and the moves after them
+GET    /symbols/search                     find a ticker by symbol or company name
+GET    /market/pulse                       the largest abnormal moves and sector returns
+GET    /events                             live job and ticker updates (server-sent events)
+POST   /chat                               Ask Metrix: grounded, multi-turn, cited
+POST   /chat/stream                        the same, streamed (server-sent events)
+GET    /conversations                      your conversations; /conversations/{id} for one
+GET    /watchlists                         your watchlists; POST, PUT, DELETE, and /{id}/digest
+GET    /jobs/{id}                          status and progress of a queued job
+GET    /health                             integrations; /health/live and /health/ready probes
+GET    /metrics                            Prometheus metrics (needs METRICS_TOKEN)
+POST   /admin/users                        create a user; PATCH /admin/users/{id}
+POST   /admin/users/{id}/keys              issue an API key; DELETE /admin/keys/{id}
+POST   /admin/prewarm                      start a pre-warm run now
+POST   /admin/backfill-analytics           queue the decomposition backfill (free)
+GET    /admin/queue                        queue health and the last run
+GET    /admin/usage                        the day's spend, by provider, operation and user
+GET    /admin/request-info                 the peer and X-Forwarded-For, to set TRUSTED_PROXY_COUNT
+```
 
-- Open the link and enter the demo key under the key icon. The key is shared with
-  reviewers alongside the submission, never in this repository. Without one, **View
-  demo data** shows the workspace on local fixture data.
-- With the key you can search any US-listed ticker. NVDA, AAPL, TSLA, MSFT and AMZN are
-  pre-warmed every weekday night; any other ticker is fetched on first request, and
-  the page shows the job's progress while it runs. Chat answers from the stored data.
-- The API serves pre-warmed tickers without a key too, but nothing that costs money:
-  new tickers, refreshes and chat need the key. Spend is capped per day.
-
-How it is deployed, how a merge to `main` reaches it, and the kill switch:
-[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+Anonymous callers read stored data; new tickers, refreshes and chat use the capped
+demo access or your own Exa and OpenAI keys. `/admin` always requires
+`X-Admin-Token`. See [Authentication](#authentication).
 
 ---
 
@@ -54,8 +159,10 @@ The API is on <http://localhost:8000>, interactive docs at <http://localhost:800
 
 ### Frontend workspace
 
-The React research workspace lives in [`frontend/`](frontend). It is a separate Vite
-application, so it does not alter the FastAPI routes or the backend's source of truth.
+The web app lives in [`frontend/`](frontend): React, TypeScript and Vite, typed
+against the API's OpenAPI document. Every view has a URL (`/t/NVDA`,
+`/t/NVDA/m/2026-06-05`, `/ask`, `/pulse`, `/watchlist`, `/methodology`), research
+progress arrives live over `GET /events`, and answers stream from `POST /chat/stream`.
 
 ```bash
 # in a second terminal, from the repository root
@@ -63,21 +170,26 @@ cp frontend/.env.example frontend/.env
 # set CORS_ALLOWED_ORIGINS=http://localhost:5173 in the root .env for local browser access
 cd frontend
 npm install
-npm run dev
+npm run dev                 # against the API on :8000
+VITE_MSW=1 npm run dev      # or against a mocked API with fictional sample data
 ```
 
-Open <http://localhost:5173>. Choose **Use demo access** to use the capped server-side
-Exa and OpenAI keys, or enter your own pair in the connection control. Browser-supplied
-keys are sent only with the current request, are never saved by Metrix or a background
-job, and are only retained in `sessionStorage` if you explicitly opt in. The initial
-screen also offers **View demo data**, which is clearly labelled local fixture data
-rather than API data. For a production check, run `npm run typecheck`, `npm run lint`,
-`npm test`, and `npm run build` from `frontend/`.
+Open <http://localhost:5173>. Press `/` or `Ctrl+K` to search and `?` for every
+shortcut. Requests use the server's capped demo access unless you enter your own Exa
+and OpenAI keys under settings; those are sent only with your requests, never saved by
+Metrix, and kept in this tab's `sessionStorage` only if you tick "Remember until this tab closes". With
+`VITE_MSW=1` a banner on every page says the data is sample data.
+
+Checks, all from `frontend/`: `npm run lint`, `npm run typecheck`, `npm test` (Vitest),
+`npm run build`, and `npm run e2e` (Playwright against the production bundle with the
+mocked API: user flows, no horizontal overflow at 390 px, axe in dark mode; it needs
+Chromium, `npx playwright install chromium` once). `npm run screenshots` retakes
+[`docs/assets/after/`](docs/assets/after).
 
 `CORS_ALLOWED_ORIGINS` is an optional, comma-separated FastAPI allow-list. It is empty
 by default (same-origin only); setting only `http://localhost:5173` permits the local
-Vite app's `GET /tickers`, `GET /jobs`, and `POST /chat` calls without enabling a
-wildcard origin.
+Vite app's calls (including the watchlist `PUT` and `DELETE`, and the rate-limit
+headers it reads) without enabling a wildcard origin.
 
 > The `curl` examples below print raw JSON. For the same data as a readable tree,
 > skip to [Reading it in a terminal](#reading-it-in-a-terminal).
@@ -91,7 +203,7 @@ wildcard origin.
 
 Without an Exa key, set `NEWS_PROVIDER=fixture` to run the entire pipeline offline
 against deterministic synthetic articles. Without an OpenAI key the price and
-movement-detection half still works — movements come back with
+movement-detection half still works: movements come back with
 `news_status: "failed"` and a warning explaining why, rather than a 500.
 
 ### Authentication
@@ -236,7 +348,7 @@ with backoff; one that fails on something permanent (an unknown symbol, a missin
 rejected API key) is marked `dead` at once. The job queue, the worker and the reasons
 behind them are described in [docs/PREWARMING.md](docs/PREWARMING.md).
 
-Response shape — news is nested inside the movement it explains, not returned as a
+Response shape: news is nested inside the movement it explains, not returned as a
 second flat list you have to join:
 
 ```jsonc
@@ -278,10 +390,16 @@ second flat list you have to join:
 | Parameter | Meaning |
 |---|---|
 | `start`, `end` | Date range (`YYYY-MM-DD`) |
-| `min_magnitude_pct` | Minimum move size **in percent** — `5` means 5% |
+| `min_magnitude_pct` | Minimum move size **in percent**: `5` means 5% |
 | `direction` | `up` or `down` |
 | `tier` | `easy`, `medium`, `hard`. Repeat for several. Restricts both which movements are returned and which articles are shown under them |
-| `include_prices` | Include the daily OHLCV bars themselves, not just the summary. Honours `start`/`end`. Off by default — a year is ~250 rows most callers don't need |
+| `include_prices` | Include the daily OHLCV bars themselves, not just the summary. Honours `start`/`end`. Off by default; a year is ~250 rows most callers don't need |
+| `trigger` | `raw`, `abnormal`, `both`: which detection test flagged the movement. Repeat for several |
+| `dominant` | `market`, `sector`, `company`: the movement's largest component |
+| `min_sar` | Only movements whose standardised abnormal return is at least this large, either sign |
+| `sort` | `date` (default), `abs_return`, `abs_sar` or `rvol`, largest first |
+| `include_benchmarks` | Also return SPY and the sector benchmark rebased to 100, for a chart overlay |
+| `include_unqualified` | Also return movements that no longer qualify but were kept for their research |
 | `limit`, `offset` | Pagination over movements (`total` is the unpaginated count) |
 | `refresh` | Force re-ingestion even if data is fresh |
 | `wait` | Run any needed ingestion inline instead of queueing it for the worker |
@@ -342,48 +460,99 @@ curl -H "X-Admin-Token: $ADMIN_TOKEN" "http://localhost:8000/admin/usage?date=20
 How the cap is enforced, and why it cannot be overshot by concurrent calls, is in
 [docs/FAIRNESS.md](docs/FAIRNESS.md).
 
-### Chat
+### Chat (Ask Metrix)
 
 ```bash
 curl -X POST http://localhost:8000/chat -H "Authorization: Bearer $METRIX_API_KEY" \
   -H 'content-type: application/json' \
-  -d '{"ticker": "NVDA", "question": "What drove the biggest drop this year?"}'
+  -d '{"question": "Did AMD and NVDA fall for the same reason in June?"}'
 ```
 
 ```jsonc
 {
   "conversation_id": "6f1c...",
-  "ticker": "NVDA",
-  "answer": "The largest decline was -6.20% on 2026-06-05 [M3], attributed to ...[A2]",
+  "ticker": "AMD",
+  "answer": "Mostly, yes. AMD fell 7.1% on 2026-06-05 [M412] and NVDA 6.2% [M398], both on the same export restriction report [A1033] ...",
   "grounded": true,
-  "sources": {
-    "movements": [{ "ref": "M3", "movement_id": 12, "date": "2026-06-05", ... }],
-    "articles":  [{ "ref": "A2", "article_id": 44, "url": "https://...", ... }]
-  }
+  "answered_by": "model",
+  "tool_calls": [{ "name": "get_movements", "arguments": { "symbol": "AMD", "start": "2026-06-01" }, "summary": "..." }],
+  "sources": { "movements": [...], "articles": [...], "filings": [...] },
+  "citations_removed": 0,
+  "suggestions": ["Why did AMD fall 7.1% on 2026-06-05?", "..."]
 }
 ```
 
-Multi-turn — pass `conversation_id` back, and the ticker carries over:
+How it answers:
 
-```bash
-curl -X POST http://localhost:8000/chat -H "Authorization: Bearer $METRIX_API_KEY" -H 'content-type: application/json' \
-  -d '{"conversation_id": "6f1c...", "question": "Was that company news or macro?"}'
-```
+- **It looks things up.** The model gets six read-only tools over the database
+  (`get_movements`, `get_movement_case`, `search_evidence` with Postgres full-text
+  search, `get_filings`, `compare` against SPY, `get_watchlist_digest`), at most five
+  calls and a token budget per question, with the spend cap checked before every
+  model call. Questions about several tickers work; tickers are found by symbol or
+  company name.
+- **Citations are checked.** Every row a tool returns has a label from its id (`M412`,
+  `A1033`, `F7`). After the answer is written, a citation of anything the tools did
+  not return is removed (and counted in `citations_removed`); `sources` lists only
+  what the answer cites, and `grounded` means it cites evidence.
+- **No model, still an answer.** When the model is unavailable, failing, too busy or
+  over the spend cap, the answer is a summary assembled from the database (each
+  ticker's largest moves and their strongest evidence), cited the same way and
+  marked `answered_by: "fallback"`. It does not count against the chat quota.
+- **Follow-ups** come from the data by template, not from the model.
+- **Streaming:** `POST /chat/stream` takes the same body and sends server-sent events
+  as it works: `tool_call`, `tool_result`, `delta` (answer text, provisional), then
+  `done` with the full response above, or `error`.
+- Pass `conversation_id` back to continue; earlier turns are replayed within a token
+  budget. Evaluation: `python -m evals.chat_eval` ([docs/EVALUATION.md](docs/EVALUATION.md)).
 
-The answer cites `[M3]`/`[A2]` labels that map to the `sources` block, so every claim
-traces back to a row in the database. If nothing relevant is stored, `grounded` is
-`false` and the model is instructed to say so rather than speculate.
+### Research endpoints (read-only)
+
+These read what is stored and never fetch, search, call a model or queue work; a
+ticker Metrix has not ingested is a 404 that points at `GET /tickers/{symbol}`.
+
+| Endpoint | What it returns |
+|---|---|
+| `GET /symbols/search?q=` | Symbols and companies: exact symbol, then prefix, then name matches |
+| `GET /tickers/{symbol}/movements/{date}` | One movement's case file: decomposition, legs, volume, drift, filings, evidence with timing and role, the benchmarks' and peers' returns that session, and the detection audit |
+| `GET /tickers/{symbol}/filings` | Stored SEC filings (filter by `form`, `item`, dates), with the movements each sits next to |
+| `GET /tickers/{symbol}/earnings` | Earnings releases (8-K Item 2.02) placed on the first session they could move, with that session's movement |
+| `GET /market/pulse?sessions=` | The latest sessions' largest abnormal moves, each with its evidence in a line, and sector returns |
+| `/watchlists`, `GET /watchlists/{id}/digest?sessions=` | Your lists (optionally weighted), and each holding's moves and contribution |
+
+Every movement also carries `evidence`: whether it is explained, still being
+researched, waiting for its news window to close, deferred by the spend cap, and
+when research is expected.
+
+### Live updates, caching and operations
+
+- `GET /events?symbol=` streams server-sent events: `job` (an ingestion or
+  enrichment changed state) and `ticker_updated` (its data changed; refetch). On
+  Postgres they come from `LISTEN`, otherwise from polling. The web app uses it
+  instead of polling the job.
+- `GET /tickers/{symbol}` returns an `ETag` and answers `If-None-Match` with `304`;
+  built responses are cached in Redis under the same tag. Both are keyed by the
+  ticker's data version, which every committed write bumps. Results:
+  [docs/PERFORMANCE.md](docs/PERFORMANCE.md).
+- Every response carries `X-Request-ID` (yours, if you send a plain one), and every
+  log line the request writes includes it.
+- `/health/live` and `/health/ready` (503 without the database) for orchestration;
+  `GET /metrics` in Prometheus format once `METRICS_TOKEN` is set (send it as a
+  bearer token): request latency by route, queue depth and lag by priority, dead
+  jobs, today's LLM tokens and dollars by operation, cache outcomes, open streams.
+- The web app's API types (`frontend/src/api/schema.d.ts`) are generated from the
+  OpenAPI document (`python scripts/export_openapi.py`, then `npm run gen:api`);
+  CI fails if either is stale.
 
 ---
 
 ## Reading it in a terminal
 
-The JSON is nested three levels deep — movement, then the articles explaining it,
-then each article's tier, score and rationale — which is the point of the product and
+The JSON is nested three levels deep (movement, then the articles explaining it,
+then each article's tier, score and rationale), which is the point of the product and
 also unreadable as raw output. `scripts/show.py` renders the same payload as a tree.
 
 It is a client that runs on *your* machine, not inside the container, so install its
-one dependency locally first — a one-time step if you started with Docker:
+one dependency locally first, a one-time step if you started with Docker:
 
 ```bash
 python3.13 -m venv .venv && source .venv/bin/activate
@@ -432,7 +601,7 @@ ready · 22 movement(s), showing 3
 | `--direction up\|down` | Only up days or only down days |
 | `--min-pct N` | Only movements at least this large, in percent |
 | `--limit N` | Movements to return (default 10) |
-| `--wait` | Ingest inline if the ticker is cold — slow, but returns finished data |
+| `--wait` | Ingest inline if the ticker is cold: slow, but returns finished data |
 | `--refresh` | Force re-ingestion even if data is fresh |
 | `--no-sparkline` | Skip fetching prices (a year of bars is ~250 rows) |
 | `--json` | Print the raw API payload instead of the tree |
@@ -441,7 +610,7 @@ ready · 22 movement(s), showing 3
 | `--api-key KEY` | Default `$METRIX_API_KEY` |
 | `--timeout SECONDS` | HTTP timeout (default 900, generous for `--wait`) |
 
-Colour is on for a terminal and off when piped, and it is never the only signal —
+Colour is on for a terminal and off when piped, and it is never the only signal:
 direction also carries a glyph and a sign, tiers are spelled out, scores are numbers.
 So piped output loses emphasis but no information:
 
@@ -454,6 +623,8 @@ scripts/show.py DHI --json | jq   # raw payload passthrough
 ---
 
 ## How a movement is defined
+
+### The raw rule (v1, unchanged)
 
 A trading day is a **major movement** when
 
@@ -469,11 +640,11 @@ A trading day is a **major movement** when
   All three are environment variables, and the values in force are stored on every
   movement row and returned in the API response.
 
-**Why both terms.** A flat 2% rule is wrong in both directions. On NVDA it flags 95 of
-251 trading days — 38% of the year, which is not a useful definition of "major". On a
-quiet utility the same 2% may be a genuine three-sigma event. The volatility term
-adapts the bar to each stock's own regime; the floor stops a very low-volatility name
-from being flagged on noise when 2σ is a few basis points. Measured over the last year:
+**Why both terms.** A flat 2% rule is wrong in both directions: on a volatile name it
+flags a large share of the year, and on a quiet utility the same 2% may be a genuine
+three-sigma event. The volatility term adapts the bar to each stock's own regime; the
+floor stops a very low-volatility name from being flagged on noise when 2 sigma is a
+few basis points.
 
 | Ticker | Trading days | Flagged by flat 2% | Flagged by `max(2%, 2σ)` |
 |---|---|---|---|
@@ -481,15 +652,142 @@ from being flagged on noise when 2σ is a few basis points. Measured over the la
 | KO | 251 | 22 | **15** |
 | JNJ | 251 | 28 | **15** |
 
+*Measured by hand for v1; no script in the repository reproduces it. It will be
+replaced by the output of `python scripts/measure_detection.py --symbols NVDA,KO,JNJ`,
+which also counts the abnormal and union modes below. That command needs yfinance,
+which the environment that wrote v2 Phase 1 could not reach.*
+
 **The window excludes the day being tested.** Including it would let a large move
-inflate its own threshold and mask itself — a lookahead bias that makes the most
+inflate its own threshold and mask itself, a lookahead bias that makes the most
 interesting days the least likely to be flagged. Every threshold is computable from
 information available at the prior close, and there is a test asserting exactly that
 (`test_threshold_is_computable_from_information_available_at_the_prior_close`).
 
 **It is auditable.** Each movement stores `rolling_std`, `threshold`,
-`threshold_source` (`floor` or `volatility`), and the `k`/window/floor used. You can
-see not just that a day was flagged, but which term of the `max()` decided it.
+`threshold_source` (`floor` or `volatility`), and the `k`/window/floor used.
+
+### Return decomposition: market, sector, company
+
+A stock that fell 4% on a day its sector fell 4% did not have 4% of news of its own.
+Every movement is split into parts with a market model and an orthogonalised sector
+factor (`app/services/decomposition.py`), estimated by OLS on the
+`DECOMPOSITION_ESTIMATION_SESSIONS` (120) sessions that **end the session before the
+move**, the same no-lookahead rule as the detector:
+
+```
+sector residual   r_s = a + b * r_m + u,             s_perp = r_s - (a + b * r_m)
+stock model       r_i = alpha + beta_m * r_m + beta_s * s_perp + e,   sigma_e on n - 3 d.f.
+
+on the move's day T
+  market   = beta_m * r_m,T
+  sector   = beta_s * s_perp,T
+  abnormal = r_i,T - (alpha + market + sector)          so alpha + market + sector + abnormal = r_i,T exactly
+  SAR      = abnormal / (sigma_e * sqrt(1 + x_T' (X'X)^-1 x_T)),   x_T = [1, r_m,T, s_perp,T]
+```
+
+Orthogonalising the sector factor is what makes the split well defined: without it the
+market and sector betas share the market's variance. The SAR uses the forecast-error
+(Patell) variance, so a day whose market move is far outside the window is not
+over-weighted. `dominant` is the largest of market, sector and company (abnormal).
+
+- **Benchmarks.** The market is `SPY`. The sector comes from the ticker's yfinance
+  profile: its industry if `BENCHMARK_INDUSTRY_MAP_JSON` has it (Semiconductors to
+  SMH, Biotechnology to XBI, Banks - Regional to KRE, Residential Construction to ITB),
+  else its sector through `BENCHMARK_SECTOR_MAP_JSON` (the SPDR Select Sector ETFs).
+  **The map is provisional**: its keys are the strings the v2 brief lists, not yet
+  checked against real yfinance responses. `tests/test_benchmarks.py` fails on any real
+  profile string the map misses once `tests/fixtures/yfinance_profiles.json` is added
+  (`scripts/measure_detection.py --profiles-out` writes it). An unmapped sector gets a
+  market-only model, and the movement says so.
+- **Self-inclusion.** A sector ETF holds the stocks it benchmarks: NVDA is a large
+  weight in XLK and SMH, so part of NVDA's own move is inside its "sector" factor, which
+  understates NVDA's company component on its biggest days. The map is configuration
+  so an equal-weight sector ETF can be used for any sector instead.
+- **Contaminated windows.** Earlier shocks inflate `sigma_e` and would hide the next
+  one, so each estimation series is winsorised at `DECOMPOSITION_WINSOR_Z` (5) robust
+  standard deviations (median plus or minus z times 1.4826 times the MAD). Every
+  series is clipped, the market included, so a crash day is not clipped in the stock
+  alone, which would invent a residual. A test shows the effect.
+- **History.** Full fetches reach `PRICE_ESTIMATION_EXTRA_DAYS` (200) calendar days
+  before the display window (`PRICE_HISTORY_DAYS`, 365), and movements are only
+  flagged, and so enriched, inside the display window, so enrichment cost does not grow.
+- **Benchmarks are data, not products.** The nightly run fetches them in its first
+  price batch and stores them like any ticker's prices; they are not ranked by demand
+  or enriched. The other price chunks wait for that batch.
+- **Fallbacks.** Fewer than `DECOMPOSITION_MIN_SESSIONS` (60) sessions, a missing
+  benchmark bar on the move or the session before it, or a ticker that is itself a
+  benchmark: the day is judged by the raw rule alone, with the reason in
+  `decomposition_warning`.
+- **Fat tails.** Daily returns are fat-tailed. A sigma multiple or a SAR is a size in
+  standard deviations, a heuristic for "unusual", never a p-value.
+
+### Detection modes
+
+`MOVEMENT_DETECTION_MODE` chooses which days are movements (`app/services/detection.py`):
+
+| Mode | A day is a movement when |
+|---|---|
+| `raw` (default) | the raw rule above, byte for byte the v1 detector |
+| `abnormal` | `|SAR| >= MOVEMENT_ABNORMAL_K` (2.5) and the return clears the floor |
+| `union` | either |
+
+Every movement records its `trigger`: `raw`, `abnormal` or `both`, whatever the mode,
+so the audit trail shows which test it passed. **Raw stays the default for now.** Union
+can only add movements, and each new movement is enrichment spend, so the switch waits
+for `scripts/measure_detection.py` to count the extra movements and their nightly cost
+on real prices, for the five production seeds and the 40-symbol seed file.
+
+One open question goes with that decision. The rule above floors the day's return, but
+then a stock that was flat on a day its sector fell 4% can never be flagged, since its
+return is below the floor. `MOVEMENT_ABNORMAL_FLOOR_BASIS=abnormal` floors the abnormal
+return instead, which does flag it; the script counts both.
+
+**Nothing paid for is deleted.** When a stored movement stops qualifying (revised
+prices, retuned parameters, another mode), it is kept with `qualifies = false` if it has
+news links or a finished enrichment, and deleted only if it has neither. A link a later
+scoring pass no longer supports is marked `superseded_at` rather than deleted. Both are
+hidden from the API (`include_unqualified=true` shows such movements) and from chat, and
+come back if they qualify again.
+
+### When the news broke: session timing
+
+News timing is in New York Stock Exchange sessions (`app/services/sessions.py`, the
+`exchange_calendars` XNYS calendar, with holidays, early closes and both DST changes),
+not calendar days. For a movement on session T, with previous session P and next
+session N, every linked article gets a `timing`:
+
+| Bucket | Published | Can cause T's close-to-close move? |
+|---|---|---|
+| `before_prior_close` | at or before close(P) | weakly, mostly priced in at P |
+| `overnight` | after close(P), before open(T) | yes, explains the opening gap |
+| `intraday` | open(T) to close(T) | yes, explains the intraday leg |
+| `after_close` | after close(T), before open(N) | no: a recap, or a cause of N |
+| `later` | from open(N) | no |
+
+An article with only a date gets `timing_precision = "day"` and a bucket only when the
+whole New York day falls inside one. `NEWS_WINDOW_MODE=sessions` also searches for news
+in sessions (`NEWS_WINDOW_SESSIONS_BEFORE` and `_AFTER`), so a Friday move's window
+runs through Monday instead of stopping on Saturday. It is off by default because it
+changes the news search requests and so their cache keys; a movement keeps the window
+it was first searched with.
+
+### What else each movement carries
+
+All from stored daily bars, no new vendor (`app/services/analytics.py`):
+
+- **Legs.** `gap = O_T * (adj_close_T / close_T) / adj_close_P - 1` and
+  `intraday = close_T / O_T - 1`, so `(1 + gap) * (1 + intraday) = 1 + r`.
+- **Relative volume.** The day's volume over the median of the 20 sessions before it.
+- **Drift.** Cumulative abnormal return over T+1..T+5 and T+1..T+20 with the model
+  fixed at T, labelled `continued` or `reversed` when it has the same or the opposite
+  sign as T's abnormal return and is at least half its size, `held` otherwise. Null
+  until those sessions exist; the nightly refresh fills it in.
+- **Volatility regime.** Annualised realised volatility of the 20 returns before T,
+  and its percentile against the same measure over the past year.
+
+A queued `backfill_analytics` job (`POST /admin/backfill-analytics` queues one per
+stored ticker) computes all of this for movements stored before v2, without any news
+or LLM call.
 
 ---
 
@@ -506,7 +804,7 @@ movement (`T-3` to `T+1` by default):
 | **Medium** | What happened to its competitors or industry? | a peer's results, sector pricing, supply/demand shifts |
 | **Hard** | What happened to the market? | rate decisions, inflation data, tariffs, regulation, geopolitics |
 
-The Hard-tier search deliberately **names no company** — only the sector. That is what
+The Hard-tier search deliberately **names no company**, only the sector. That is what
 makes the tier work at all (a Fed decision article never mentions NVIDIA), and it means
 every ticker in a sector on a given date produces an identical request and shares one
 cached search. "Identical" covers every field the cache key hashes, including the
@@ -516,7 +814,7 @@ this company's move, the Hard summary only asks what would move the sector.
 Competitors for the Medium tier are resolved by asking the LLM, grounded in the
 yfinance `sector`/`industry`, and cached on the ticker row for 30 days. A static
 ticker→competitor map was the alternative; it is accurate the day it is written, goes
-stale in a quarter, and covers only the tickers someone thought to add — which would
+stale in a quarter, and covers only the tickers someone thought to add, which would
 silently reduce the Medium tier to nothing for most inputs. If the LLM is unavailable
 the tier degrades to an industry-keyword search rather than disappearing.
 
@@ -527,17 +825,17 @@ noise. Keyword overlap and recency do not establish explanation. So every dedupl
 candidate goes into **one LLM call per movement**, along with the move's size and
 direction, and is scored on:
 
-1. **Causality** — does it report something that moves a share price, or is it just
+1. **Causality**: does it report something that moves a share price, or is it just
    *about* the company? Recaps that cite the price move as their subject explain nothing.
-2. **Direction** — is the news consistent with the *sign* of the move?
-3. **Timing** — publication dates are pre-computed relative to the movement (`T-1`,
+2. **Direction**: is the news consistent with the *sign* of the move?
+3. **Timing**: publication dates are pre-computed relative to the movement (`T-1`,
    `T+0`) so the model reasons about timing instead of subtracting dates.
 
-The model returns a score (0–1), a tier, and a one-line rationale, all stored on the
+The model returns a score (0 to 1), a tier, and a one-line rationale, all stored on the
 `movement_news_links` row and returned in the API. Articles scoring below
 `RELEVANCE_MIN_SCORE` (0.35) or judged irrelevant are not linked at all.
 
-Scoring all candidates in one call — rather than per article or per tier — lets the
+Scoring all candidates in one call (rather than per article or per tier) lets the
 model rank them against each other and **reassign the tier**: the link stores both
 `search_tier` (which query found it) and `relevance_tier` (what the model says it
 actually is), because a macro-flavoured search regularly surfaces a company-specific
@@ -561,19 +859,40 @@ Real output for `DHI` (D.R. Horton, a rate-sensitive homebuilder):
 ```
 
 The Hard-tier article **never mentions D.R. Horton**. It was found by a company-free
-macro query and connected to the move through rate sensitivity — which is the entire
+macro query and connected to the move through rate sensitivity, which is the entire
 point of the tier, and what keyword search over the ticker cannot do.
 
 ### A failure this design caught
 
 An early live run linked an article published `2026-07-30` to a movement on
-`2026-07-02` and the scorer rated it **0.95** — a confident explanation for a move
+`2026-07-02` and the scorer rated it **0.95**: a confident explanation for a move
 four weeks earlier. Two causes: Exa treats the published-date filter as a hint and
 leaked an out-of-range result, and deduplication later resolved a dateless search hit
 to a stored article whose real date was outside the window. The window is now enforced
-in code at both points — on provider output, and against the stored article before a
-link is written — rather than trusted to the provider or the model. Both paths have
+in code at both points (on provider output, and against the stored article before a
+link is written) rather than trusted to the provider or the model. Both paths have
 regression tests.
+
+### SEC filings and scorer v2 (opt-in)
+
+With `SEC_EDGAR_ENABLED=true` and a contact in `SEC_USER_AGENT`, each enrichment also
+reads the company's EDGAR filing list (cached, rate limited, SEC hosts only) and
+attaches the filings accepted in the movement's news window, with their session
+timing. They are returned as `filings` on each movement: form, 8-K items as events,
+acceptance time, link. EDGAR is best effort and never fails an enrichment.
+
+`RELEVANCE_SCORER_VERSION=v2` switches to a second scorer, still one call per
+movement. It is shown what v1 is not: the decomposition ("about 80% company-specific"),
+which session leg carried the move, each candidate's session bucket instead of a
+calendar offset, the filings as candidates, and a source-quality hint (primary,
+tier-1 newsroom, other; configurable domain lists). It returns a `role` per link
+(`primary`, `contributing`, `context`) and may abstain on a movement
+(`evidence_abstained`, `abstain_reason`) when nothing explains it. One rule is code,
+not prompt: a candidate published after the next session opened is never linked.
+Every link records its `scorer_version`.
+
+v1 stays the default until the evaluation (`python -m evals.run --scorer v2`) shows v2
+is better on the labelled set; see [docs/EVALUATION.md](docs/EVALUATION.md).
 
 ---
 
@@ -581,37 +900,53 @@ regression tests.
 
 ```
 app/
-  api/routes/     tickers.py, chat.py, jobs.py, health.py — thin: validate, delegate, shape
+  api/routes/     tickers, research (search, case file, filings, earnings, pulse),
+                  chat (and /chat/stream), conversations, watchlists, events (SSE),
+                  jobs, health, metrics, admin; thin: validate, delegate, shape
   api/errors.py   domain exception → HTTP status, one error body shape
+  api/middleware.py  request ids, request metrics
   services/
-    movements.py  volatility-adjusted detection — pure, no DB, no network
-    prices.py     yfinance, defensive; single and batched fetches, and the merge
-                  that rebases stored history after splits and dividends
-    news/         provider abstraction, Exa adapter, fixture adapter, response cache,
-                  tier query construction
-    peers.py      competitor resolution (LLM, cached on the ticker)
-    relevance.py  the scoring prompt and its structured output
-    ingestion.py  orchestration: refresh_prices (bars → movements), then
-                  enrich_movement (news → scores → links) per movement
-    queue.py      the Postgres job queue: enqueue/dedupe, claim, retry, reap
-    demand.py     decayed popularity per symbol, and the nightly pre-warm universe
-    prewarm.py    the nightly run: fan-out, price chunks, priorities, the budget
-    schedule.py   when it runs: 17:15 New York, weekdays, DST-correct
-    ratelimit.py  per-provider token buckets for Exa, Anthropic and yfinance
-    spend.py      the spend ledger and the daily cap: reserve, settle, refuse
-    auth.py       API keys (issue, check, revoke) and the caller's identity
-    limits.py     GCRA and daily counters, on Redis or in memory, with fall-back
-    quotas.py     per-plan quotas: charge, refund
+    sessions.py       the XNYS trading calendar and session timing of evidence
+    benchmarks.py     SPY and the sector ETF map (configuration, tested)
+    decomposition.py  market model with an orthogonalised sector factor, SAR
+    detection.py      the detection modes (raw, abnormal, union)
+    analytics.py      per-movement gap, RVOL, regime, drift
+    movements.py      the v1 volatility-adjusted rule, unchanged
+    prices.py         yfinance, defensive; single and batched fetches, and the merge
+                      that rebases stored history after splits and dividends
+    edgar.py, filings.py  SEC EDGAR: fetch 8-Ks, attach them to the moves they explain
+    news/             provider abstraction, Exa adapter, fixture adapter, response
+                      cache, tier query construction
+    peers.py          competitor resolution (LLM, cached on the ticker)
+    relevance.py      the v1 scoring prompt and its structured output
+    relevance_v2.py   scorer v2 (opt-in): filings as candidates, roles, abstention
+    ingestion.py      orchestration: refresh_prices (bars → movements), then
+                      enrich_movement (news → scores → links) per movement
+    evidence.py       each movement's evidence status (explained, researching, ...)
+    response_cache.py ETags and the Redis response cache, keyed by data versions
+    events.py         the SSE broker on Postgres LISTEN, with a polling fallback
+    returns.py        session returns for the pulse and watchlist digests
+    queue.py          the Postgres job queue: enqueue/dedupe, claim, retry, reap
+    demand.py         decayed popularity per symbol, and the nightly pre-warm universe
+    prewarm.py        the nightly run: fan-out, price chunks, priorities, the budget
+    schedule.py       when it runs: 17:15 New York, weekdays, DST-correct
+    ratelimit.py      per-provider token buckets for Exa, the LLMs and yfinance
+    spend.py          the spend ledger and the daily cap: reserve, settle, refuse
+    auth.py, limits.py, quotas.py  API keys, GCRA limits on Redis, per-plan quotas
     symbol_directory.py  the US symbol directory: download, parse, refresh, check
-    job_handlers.py  what each kind of queued job does
-    chat.py       retrieval, prompt assembly, citation labels
-    llm/          provider abstraction, Anthropic adapter, uniform error mapping
-  models/         SQLAlchemy: tickers, price_history, movements, news_articles,
-                  movement_news_links, news_query_cache, conversations, chat_messages,
-                  jobs, prewarm_runs, ticker_demand
+    job_handlers.py   what each kind of queued job does
+    chat.py           Ask Metrix: the bounded tool loop, citation checks, fallback
+    chat_tools.py     its six read-only tools and their citation labels
+    llm/              provider abstraction (OpenAI, Anthropic), tool turns, streaming
+  db/versions.py  per-ticker data versions, bumped at commit (cache invalidation)
+  models/         SQLAlchemy: tickers, prices, movements, news, filings, chat,
+                  jobs, demand, identity, usage, watchlists
   worker.py       `python -m app.worker`: claim loops, heartbeats, graceful shutdown
-  schemas/        Pydantic request/response models
-  core/           config (all tunables), logging, domain exceptions
+  schemas/        Pydantic request/response models (`ApiModel` base)
+  core/           config (all tunables), logging, metrics, domain exceptions
+frontend/         the React web app (see "Frontend workspace")
+evals/            the relevance and chat evaluations
+loadtest/         Locust spike test and a fake OpenAI-compatible model
 ```
 
 Ingestion is a service, not route code: `GET /tickers/{symbol}` decides *whether*
@@ -621,7 +956,7 @@ ingestion is owed, and `app.services.ingestion` decides what that means.
 
 Re-running for a ticker extends and corrects; it never duplicates.
 
-- Price bars and movements are reconciled against what is stored — insert new, update
+- Price bars and movements are reconciled against what is stored: insert new, update
   changed (adjusted closes get revised by splits), delete days that no longer clear the
   threshold.
 - Articles deduplicate on a **normalized**-URL hash (lowercased host, `www.` and
@@ -641,7 +976,7 @@ Re-running for a ticker extends and corrects; it never duplicates.
 
 Prices are load-bearing: if yfinance fails there is nothing to explain, and the request
 returns `404` (unknown ticker) or `502` (upstream failure). Everything downstream is
-best-effort **per movement** — a news timeout or an LLM error marks that one movement
+best-effort **per movement**: a news timeout or an LLM error marks that one movement
 `news_status: "failed"`, adds a warning to the response, and the run continues. One
 flaky news search never costs the caller its price and movement data.
 
@@ -670,7 +1005,7 @@ calls. What keeps it bounded:
 - **One LLM scoring call per movement**, not per article or per tier.
 - **`MAX_MOVEMENTS_PER_INGEST`** (default 10) caps enrichment per run, largest moves
   first. The response warns how many were skipped; re-running picks up the next batch.
-- **Peers are cached** for 30 days — one call per ticker, not per movement.
+- **Peers are cached** for 30 days: one call per ticker, not per movement.
 - Exa calls retry with exponential backoff on 429/5xx only; a 4xx is not retried,
   because retrying a malformed request just burns quota.
 - **A daily spend cap** with a share reserved for users, enforced before every billable
@@ -700,52 +1035,73 @@ pytest
 
 No Docker, no network, no API keys.
 
-- `tests/test_movements.py` — 35 tests. The detection math: the floor, the sigma
+- `tests/test_movements.py`: 35 tests. The detection math: the floor, the sigma
   term, their interaction, the no-lookahead guarantee, direction symmetry, degenerate
   inputs (empty series, flat series, duplicate dates, non-positive prices), and
   parameter validation. Plus the yfinance error classification that decides whether a
   failed fetch is an unknown symbol (404) or a broken upstream (502).
-- `tests/test_api.py` — a smoke test per endpoint plus filtering, pagination, the
+- `tests/test_api.py`: a smoke test per endpoint plus filtering, pagination, the
   202/200 ingestion states, idempotent re-ingestion, the concurrency claim, error
   mapping, and multi-turn chat.
-- `tests/test_news.py` — window enforcement, URL-normalized deduplication, the
+- `tests/test_news.py`: window enforcement, URL-normalized deduplication, the
   read-through response cache, its window-aware TTL, and Hard-tier cache sharing.
-- `tests/test_freshness.py` — PARTIAL enrichment, idempotent re-enrichment, and the
+- `tests/test_freshness.py`: PARTIAL enrichment, idempotent re-enrichment, and the
   retry cap on movements that keep failing.
-- `tests/test_queue.py` — the queue's semantics: dedupe and priority bumps, claim
+- `tests/test_queue.py`: the queue's semantics: dedupe and priority bumps, claim
   order, blocking, backoff, permanent errors, stale locks and heartbeats, the
   enrichment budget.
-- `tests/test_worker.py` — the worker and job handlers end to end, including
+- `tests/test_worker.py`: the worker and job handlers end to end, including
   graceful shutdown and the follow-up job a PARTIAL enrichment enqueues.
-- `tests/test_prices.py` — batched yfinance parsing from a synthetic multi-ticker
+- `tests/test_prices.py`: batched yfinance parsing from a synthetic multi-ticker
   frame, merging a short refresh window into stored history, and the split/dividend
   rebase.
-- `tests/test_relevance.py` — the scoring request and result, built and applied
+- `tests/test_relevance.py`: the scoring request and result, built and applied
   without the model in between.
-- `tests/test_demand.py` — popularity decay, recording hits, and choosing the pre-warm
+- `tests/test_demand.py`: popularity decay, recording hits, and choosing the pre-warm
   universe (seeds, most popular, recently requested, minus permanent failures).
-- `tests/test_prewarm.py` — one whole night end to end, the price chunks, the budget,
+- `tests/test_prewarm.py`: one whole night end to end, the price chunks, the budget,
   priorities, the scheduler, the admin endpoints, and enriching on demand what the
   budget deferred.
-- `tests/test_schedule.py` — the 17:15 schedule across both DST changes and weekends.
-- `tests/test_ratelimit.py` — the token buckets on a fake clock, and backing off on 429.
-- `tests/test_spend.py` — prices and estimates, reserve and settle, the cap and the
+- `tests/test_schedule.py`: the 17:15 schedule across both DST changes and weekends.
+- `tests/test_ratelimit.py`: the token buckets on a fake clock, and backing off on 429.
+- `tests/test_spend.py`: prices and estimates, reserve and settle, the cap and the
   background share, metering at both seams, how a refusal is held in the worker and
   served in the API, attribution, and `/admin/usage`. `tests/test_postgres.py` races
   forty reservations for one cap on real Postgres.
-- `tests/test_auth.py` — API keys and every 401, anonymous callers and the
+- `tests/test_auth.py`: API keys and every 401, anonymous callers and the
   `X-Forwarded-For` rule, who may see which job and conversation, the admin user and key
   endpoints, and the bootstrap script.
-- `tests/test_limits.py` — the GCRA math on a fake clock, the limit-store contract
+- `tests/test_limits.py`: the GCRA math on a fake clock, the limit-store contract
   (in memory, and on real Redis when `TEST_REDIS_URL` is set), and the fall-back when
   Redis is unreachable.
-- `tests/test_quotas.py` — 429s and their headers, chat's charge and refund, cold
+- `tests/test_quotas.py`: 429s and their headers, chat's charge and refund, cold
   ingests and refreshes, `wait=true` and its inline slots, and `/health` on Redis.
-- `tests/test_symbols.py` — the directory parser against samples cut from the real
+- `tests/test_symbols.py`: the directory parser against samples cut from the real
   files, `BRK.B` ↔ `BRK-B`, refreshes that never empty or gut the table, enforce, warn
   and off, demand that one caller cannot inflate, and the refresh cooldown.
-- `tests/test_show_cli.py` — the renderer's citation parsing, colour gating, and
+- `tests/test_sessions.py`, `tests/test_decomposition.py`, `tests/test_analytics.py`,
+  `tests/test_detection.py`, `tests/test_benchmarks.py`: the finance core on the real
+  XNYS calendar (early close, holiday Monday, both DST changes, Friday to Monday) and on
+  synthetic data with known parameters (parameter recovery, exact additivity, the
+  Patell SAR, no lookahead, winsorisation, every detection mode).
+- `tests/test_finance_ingestion.py`, `tests/test_finance_api.py`: the same wired into
+  ingestion, the nightly run, the backfill, the API and chat, including paid work kept
+  rather than deleted.
+- `tests/test_show_cli.py`: the renderer's citation parsing, colour gating, and
   sparkline edge cases.
+- v2: `tests/test_edgar.py` and `tests/test_primary_sources.py` (EDGAR parsing,
+  filings attached to moves, scorer v2), `tests/test_evals.py` and
+  `tests/test_chat_eval.py` (the evaluations' metrics and runners),
+  `tests/test_read_cache.py` (data versions, ETags, the response cache),
+  `tests/test_events.py` (SSE, including real Postgres `LISTEN`),
+  `tests/test_evidence.py`, `tests/test_research.py`, `tests/test_watchlists.py`,
+  `tests/test_observability.py`, `tests/test_tool_turns.py`,
+  `tests/test_chat_tools.py`, `tests/test_ask_metrix.py`, `tests/test_chat_stream.py`,
+  and `tests/test_openapi_contract.py` (the web app's generated types match the API).
+
+Totals at the end of v2: 828 passed and 52 skipped on SQLite alone; 879 passed and 1
+skipped with Postgres and Redis (575 on v1). The web app adds 34 Vitest unit tests and
+19 Playwright browser tests (`cd frontend && npm test && npm run e2e`).
 
 Endpoint tests run on in-memory SQLite with the news provider and LLM stubbed, so
 `pytest` is one command with no dependencies. The models are declared portably
@@ -770,15 +1126,25 @@ TEST_REDIS_URL=redis://localhost:6380/15 pytest
 
 ## Known limitations
 
-- **Movement detection is univariate.** It does not separate a stock's own move from
-  its sector's or the market's. A beta-adjusted or residual-return definition would
-  distinguish "NVDA fell because NVDA" from "NVDA fell because everything fell", which
-  is exactly the distinction the Hard tier is trying to make downstream.
-- **Article bodies are whatever Exa returns** — usually a summary or the first ~2k
+- **The default detector is still univariate.** The decomposition separates a stock's
+  own move from its sector's and the market's on every movement, but the default mode
+  stays `raw` until union's extra cost is measured on real prices (see "Detection
+  modes").
+- **Sector benchmarks include the stock.** A sector ETF's own constituents leak into
+  the sector factor; configurable, not solved. And the benchmark map is provisional
+  until checked against real yfinance profile strings.
+- **Article bodies are whatever Exa returns**: usually a summary or the first ~2k
   characters, sometimes paywalled boilerplate. Scoring quality is bounded by that.
 - **Rate limits are only as shared as Redis is up.** While Redis is unreachable each
   process limits itself to rate / `EXPECTED_PROCESSES`, which is right only if that
   setting matches the number of processes; see [docs/FAIRNESS.md](docs/FAIRNESS.md).
 - **Tickers outside the pre-warm universe are still cold** on their first request.
-- **Relevance is unevaluated.** There is no labelled set, so "the scoring is good" is
-  an assertion, not a measurement. See `SUBMISSION.md`.
+- **Relevance is unevaluated so far.** The evaluation harness exists (snapshots,
+  labels, metrics with bootstrap intervals, replay, a CI gate), but the labelled set is
+  still empty, so "the scoring is good" is not yet a measurement. See
+  [docs/EVALUATION.md](docs/EVALUATION.md). Scorer v2 and SEC filings are built and
+  tested offline but off by default, for the same reason.
+- **Filing acceptance times are read as New York time**, which is unverified against a
+  live filing (sec.gov was not reachable where it was built). One setting changes it.
+- **No earnings calendar and no press-release text extraction yet.** Filings carry
+  their 8-K items, not their exhibit text.

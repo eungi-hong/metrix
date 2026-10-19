@@ -5,10 +5,14 @@ enrichment is the expensive part, so it is spent only on new or unfinished
 movements, most-demanded tickers first, within a per-run budget.
 
     schedule_nightly        select the universe, open a `prewarm_runs` row,
-          |                 enqueue one refresh_prices job per chunk
+          |                 enqueue one refresh_prices job per chunk; the
+          |                 first chunk also carries the benchmarks (SPY and
+          |                 the sector ETFs) and the universe's peers (prices
+          |                 only, for the case file), and the others wait for it
           v
-    refresh_prices (xN)     batch-download prices, detect movements, and for
-          |                 each movement that needs news enqueue:
+    refresh_prices (xN)     batch-download prices (benchmarks stored first,
+          |                 as data), detect movements, refresh analytics,
+          |                 and for each movement that needs news enqueue:
           +--> prewarm_sector_macro   the sector's Hard-tier search, once per
           |                           (sector, date), so it is cached first
           +--> enrich_movement        blocked by that macro job; takes a unit
@@ -20,6 +24,8 @@ Priority bands (lower runs first)
     5       nightly fan-out: schedule_nightly and refresh_prices (cheap, and
             everything else waits on them)
     10      prewarm_sector_macro (one search that unblocks many enrichments)
+    15-18   the latest session's moves of seed tickers, by move size, so the
+            newest move on a seed ticker is explained by morning
     20-59   nightly enrichment of tickers people have asked for, by
             popularity, then move size (`enrichment_priority`)
     60-89   nightly enrichment of seed tickers nobody has asked for yet
@@ -47,7 +53,8 @@ from app.core.logging import get_logger
 from app.models.enums import IngestStatus
 from app.models.jobs import JobKind, JobSource, PrewarmRun, PrewarmRunStatus
 from app.models.market import Movement, PriceBar, Ticker
-from app.services import demand, ingestion, queue
+from app.core.symbols import is_valid_symbol, normalize_symbol
+from app.services import benchmarks, demand, ingestion, queue, symbol_directory
 from app.services import prices as price_service
 from app.services.demand import UniverseEntry
 from app.services.ingestion import ProgressCallback
@@ -56,6 +63,7 @@ logger = get_logger(__name__)
 
 # ------------------------------------------------------------ priorities
 
+LATEST_SESSION_BAND_START = 15
 DEMAND_BAND_START = 20
 SEED_BAND_START = 60
 
@@ -70,8 +78,14 @@ MOVE_BUCKETS = len(MOVE_SIZE_STEPS) + 1
 SEED_MOVE_STRIDE = 7
 
 
-def enrichment_priority(popularity: float, abs_return: float, *, seeded: bool) -> int:
+def enrichment_priority(
+    popularity: float, abs_return: float, *, seeded: bool, latest_session: bool = False
+) -> int:
     """Queue priority for a nightly enrichment. Lower runs, and is paid for, first.
+
+    A seed ticker's move on the session just refreshed comes first of all
+    (15-18, by move size), whatever its demand: the newest move on the tickers
+    the product shows first should be explained by morning.
 
     A ticker with any demand lands in 20-59: four slots per popularity bucket,
     the slot chosen by move size, so popularity dominates and move size only
@@ -79,6 +93,8 @@ def enrichment_priority(popularity: float, abs_return: float, *, seeded: bool) -
     move size alone: it is warmed with whatever budget demand left over.
     """
     move = _move_bucket(abs_return)
+    if seeded and latest_session:
+        return LATEST_SESSION_BAND_START + move
     if popularity <= 0 and seeded:
         return SEED_BAND_START + SEED_MOVE_STRIDE * move
     return DEMAND_BAND_START + MOVE_BUCKETS * _popularity_bucket(popularity) + move
@@ -149,20 +165,29 @@ async def schedule_nightly(
     universe = await demand.select_prewarm_universe(session, now=now)
     size = settings.price_batch_size
     chunks = [universe[i : i + size] for i in range(0, len(universe), size)]
+    first_chunk = queue.prices_key(trading_date, 0)
     # The universe is most popular first, so the first chunks matter most.
     # They are not jittered: the token buckets already pace yfinance, and
-    # jitter would only shuffle that order.
+    # jitter would only shuffle that order. The first chunk also refreshes
+    # the benchmarks, in the same batch download; the rest wait for it, so
+    # every ticker is decomposed against today's benchmark bars. A first
+    # chunk that dies still releases them (any terminal state does).
     for index, chunk in enumerate(chunks):
+        payload: dict[str, Any] = {
+            "run_id": run.id,
+            "trading_date": trading_date.isoformat(),
+            "entries": [asdict(entry) for entry in chunk],
+        }
+        if index == 0:
+            payload["benchmarks"] = benchmarks.all_symbols()
+            payload["peers"] = await peer_symbols(session, universe)
         await queue.enqueue(
             session,
             JobKind.REFRESH_PRICES,
-            {
-                "run_id": run.id,
-                "trading_date": trading_date.isoformat(),
-                "entries": [asdict(entry) for entry in chunk],
-            },
+            payload,
             priority=queue.PRIORITY_NIGHTLY_FANOUT,
             dedupe_key=queue.prices_key(trading_date, index),
+            blocked_by_key=None if index == 0 else first_chunk,
             source=JobSource.SCHEDULED,
             run_id=run.id,
             now=now,
@@ -183,6 +208,45 @@ async def schedule_nightly(
     return run
 
 
+async def peer_symbols(session: AsyncSession, universe: list[UniverseEntry]) -> list[str]:
+    """The listed peers of the universe's tickers that are not refreshed anyway,
+    at most PREWARM_PEER_SYMBOLS_MAX, most popular tickers' peers first.
+
+    Prices only: the case file shows how a move's peers did the same session.
+    Peers come from the LLM's peer sets, so each must pass the symbol directory
+    as listed (or seeded or already ingested) before it costs a fetch.
+    """
+    limit = settings.prewarm_peer_symbols_max
+    if limit <= 0 or not universe:
+        return []
+    skip = {entry.symbol for entry in universe} | set(benchmarks.all_symbols())
+    stored = dict(
+        (
+            await session.execute(
+                sa.select(Ticker.symbol, Ticker.peers).where(
+                    Ticker.symbol.in_([entry.symbol for entry in universe]), Ticker.peers.is_not(None)
+                )
+            )
+        ).all()
+    )
+    chosen: list[str] = []
+    for entry in universe:
+        for peer in (stored.get(entry.symbol) or {}).get("peers", []):
+            raw = peer.get("ticker") if isinstance(peer, dict) else None
+            if not raw:
+                continue
+            symbol = normalize_symbol(raw)
+            if symbol in skip or symbol in chosen or not is_valid_symbol(symbol):
+                continue
+            verdict = await symbol_directory.check(session, symbol)
+            if not verdict.allowed or verdict.reason == "unlisted":
+                continue
+            chosen.append(verdict.symbol)
+            if len(chosen) >= limit:
+                return chosen
+    return chosen
+
+
 # ------------------------------------------------------- refresh_prices
 
 # A short refresh must overlap the stored bars by at least this many calendar
@@ -192,7 +256,7 @@ MIN_OVERLAP_DAYS = 7
 
 
 def needs_full_history(last_stored: date | None, today: date) -> bool:
-    """Whether a ticker needs a full year of prices rather than the short window.
+    """Whether a ticker needs its full history rather than the short window.
 
     Full when nothing is stored yet, or when the last stored bar is too old for
     the short window to overlap it by `MIN_OVERLAP_DAYS`.
@@ -210,6 +274,10 @@ class ChunkOutcome:
     failed: int = 0
     movements_found: int = 0
     enrichments_queued: int = 0
+    benchmarks_refreshed: int = 0
+    benchmarks_failed: int = 0
+    peers_refreshed: int = 0
+    peers_failed: int = 0
 
 
 async def refresh_chunk(
@@ -219,6 +287,9 @@ async def refresh_chunk(
     *,
     now: datetime,
     progress: ProgressCallback | None = None,
+    benchmark_symbols: list[str] | None = None,
+    peer_symbols: list[str] | None = None,
+    trading_date: date | None = None,
 ) -> ChunkOutcome:
     """Refresh prices for one chunk of the universe and queue its enrichments.
 
@@ -227,15 +298,40 @@ async def refresh_chunk(
     same work. One symbol failing never fails the chunk; only a chunk in which
     every attempted symbol failed transiently raises, so the queue retries it.
     Commits per ticker.
+
+    `benchmark_symbols` (the first chunk only) are fetched in the same batch
+    and stored first, as prices only: no detection, demand or enrichment. A
+    benchmark that fails is logged and costs only the decomposition of
+    tickers that use it, which falls back with a warning.
     """
     outcome = ChunkOutcome()
     by_symbol = {entry.symbol: entry for entry in entries}
     tickers = {
         symbol: await ingestion.get_or_create_ticker(session, symbol) for symbol in by_symbol
     }
+    benchmark_tickers = {
+        symbol: await ingestion.get_or_create_ticker(session, symbol)
+        for symbol in (benchmark_symbols or [])
+        if symbol not in tickers
+    }
+    peer_tickers = {
+        symbol: await ingestion.get_or_create_ticker(session, symbol)
+        for symbol in (peer_symbols or [])
+        if symbol not in tickers and symbol not in benchmark_tickers
+    }
     await session.commit()
 
-    histories = await _fetch_chunk(session, tickers, today=now.date())
+    histories = await _fetch_chunk(session, tickers | benchmark_tickers, today=now.date())
+    for symbol, ticker in benchmark_tickers.items():
+        await _store_benchmark(session, ticker, histories[symbol], outcome)
+    if peer_tickers:
+        # A short window is all the case file needs, whatever is stored.
+        peer_histories = await price_service.fetch_price_histories(
+            list(peer_tickers), settings.prewarm_price_lookback_days
+        )
+        for symbol, ticker in peer_tickers.items():
+            await _store_benchmark(session, ticker, peer_histories[symbol], outcome, benchmark=False)
+
     for done, (symbol, ticker) in enumerate(tickers.items(), start=1):
         result = histories[symbol]
         if not await ingestion.claim_ingestion(session, ticker):
@@ -251,7 +347,8 @@ async def refresh_chunk(
         else:
             try:
                 await _refresh_one(
-                    session, ticker, result, by_symbol[symbol], run_id, now, outcome
+                    session, ticker, result, by_symbol[symbol], run_id, now, outcome,
+                    trading_date=trading_date,
                 )
             except Exception as exc:
                 await session.rollback()
@@ -276,11 +373,49 @@ async def refresh_chunk(
     return outcome
 
 
+async def _store_benchmark(
+    session: AsyncSession,
+    ticker: Ticker,
+    result: price_service.PriceHistory | Exception,
+    outcome: ChunkOutcome,
+    *,
+    benchmark: bool = True,
+) -> None:
+    """Store prices only (a benchmark, or with `benchmark=False` a peer)."""
+    if isinstance(result, Exception):
+        if benchmark:
+            outcome.benchmarks_failed += 1
+        else:
+            outcome.peers_failed += 1
+        logger.warning("reference_refresh_failed", symbol=ticker.symbol, benchmark=benchmark, error=str(result))
+        return
+    if not await ingestion.claim_ingestion(session, ticker):
+        logger.info("benchmark_skipped_claim_held", symbol=ticker.symbol)
+        return
+    try:
+        await ingestion.store_benchmark_prices(session, ticker, result, benchmark=benchmark)
+        await session.commit()
+        if benchmark:
+            outcome.benchmarks_refreshed += 1
+        else:
+            outcome.peers_refreshed += 1
+    except Exception as exc:
+        await session.rollback()
+        if benchmark:
+            outcome.benchmarks_failed += 1
+        else:
+            outcome.peers_failed += 1
+        logger.warning("reference_refresh_failed", symbol=ticker.symbol, benchmark=benchmark, error=str(exc))
+    finally:
+        await ingestion.release_claim(session, ticker.symbol)
+
+
 async def _fetch_chunk(
     session: AsyncSession, tickers: dict[str, Ticker], *, today: date
 ) -> dict[str, price_service.PriceHistory | Exception]:
-    """Batch-fetch a chunk: the short window where it suffices, a full year
-    where it does not, and company profiles only where none is stored."""
+    """Batch-fetch a chunk: the short window where it suffices, the full
+    history (display window plus estimation history) where it does not, and
+    company profiles only where none is stored."""
     last_bar: dict[int, date] = dict(
         (
             await session.execute(
@@ -297,7 +432,7 @@ async def _fetch_chunk(
     histories: dict[str, price_service.PriceHistory | Exception] = {}
     for symbols, days in (
         (short, settings.prewarm_price_lookback_days),
-        (full, settings.price_history_days),
+        (full, settings.price_fetch_days),
     ):
         if symbols:
             histories |= await price_service.fetch_price_histories(
@@ -314,6 +449,8 @@ async def _refresh_one(
     run_id: int,
     now: datetime,
     outcome: ChunkOutcome,
+    *,
+    trading_date: date | None = None,
 ) -> None:
     refreshed = await ingestion.refresh_prices(session, ticker, history)
     ticker.ingest_status = IngestStatus.COMPLETE
@@ -328,7 +465,10 @@ async def _refresh_one(
         # window to close, and one that failed NEWS_MAX_ATTEMPTS times is left
         # for an explicit refresh.
         if ingestion.needs_enrichment(movement, now):
-            if await enqueue_enrichment(session, ticker, movement, entry, run_id):
+            if await enqueue_enrichment(
+                session, ticker, movement, entry, run_id,
+                latest_session=trading_date is not None and movement.date == trading_date,
+            ):
                 outcome.enrichments_queued += 1
     await session.commit()
 
@@ -339,6 +479,8 @@ async def enqueue_enrichment(
     movement: Movement,
     entry: UniverseEntry,
     run_id: int,
+    *,
+    latest_session: bool = False,
 ) -> bool:
     """Queue the sector's macro search, and this movement's enrichment behind it.
 
@@ -349,7 +491,11 @@ async def enqueue_enrichment(
     await queue.enqueue(
         session,
         JobKind.PREWARM_SECTOR_MACRO,
-        {"sector": ticker.sector, "date": movement.date.isoformat()},
+        {
+            "sector": ticker.sector,
+            "date": movement.date.isoformat(),
+            "window_mode": movement.news_window_mode,
+        },
         priority=queue.PRIORITY_MACRO,
         dedupe_key=macro,
         source=JobSource.SCHEDULED,
@@ -359,7 +505,9 @@ async def enqueue_enrichment(
         session,
         JobKind.ENRICH_MOVEMENT,
         {"movement_id": movement.id, "run_id": run_id},
-        priority=enrichment_priority(entry.popularity, movement.abs_return, seeded=entry.seeded),
+        priority=enrichment_priority(
+            entry.popularity, movement.abs_return, seeded=entry.seeded, latest_session=latest_session
+        ),
         dedupe_key=queue.enrich_key(movement.id),
         blocked_by_key=macro,
         source=JobSource.SCHEDULED,

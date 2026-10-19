@@ -7,6 +7,8 @@ request without leaking their vendor API into the ingestion or chat services.
 
 from __future__ import annotations
 
+import json
+from types import SimpleNamespace
 from typing import Any
 
 import openai
@@ -15,7 +17,15 @@ from app.core.config import settings
 from app.core.errors import ConfigurationError, LLMError
 from app.core.logging import get_logger
 from app.services import ratelimit, spend
-from app.services.llm.base import LLMProvider, MessageParam, T
+from app.services.llm.base import (
+    LLMProvider,
+    MessageParam,
+    T,
+    TextCallback,
+    ToolCall,
+    ToolSpec,
+    ToolTurn,
+)
 
 logger = get_logger(__name__)
 
@@ -131,6 +141,80 @@ class OpenAIProvider(LLMProvider):
             raise LLMError(self.name, "the model returned no text")
         return text
 
+    async def tool_turn(
+        self,
+        *,
+        system: str,
+        messages: list[MessageParam],
+        tools: list[ToolSpec],
+        operation: str,
+        max_tokens: int | None = None,
+        on_text: TextCallback | None = None,
+    ) -> ToolTurn:
+        """Streamed chat completion with function tools.
+
+        The system prompt and tool definitions come first and never change
+        between turns, so OpenAI's automatic prompt caching applies to them.
+        Tool-call fragments arrive by index and are joined here; usage comes
+        in the final chunk (`include_usage`).
+        """
+        client = self._require_client()
+        max_tokens = max_tokens or settings.llm_max_tokens
+        wire = [{"role": "system", "content": system}, *_openai_messages(messages)]
+        prompt_chars = sum(len(json.dumps(m, default=str)) for m in wire) + sum(
+            len(json.dumps(t.parameters)) + len(t.description) for t in tools
+        )
+        estimate = spend.llm_estimate(self.model, prompt_chars=prompt_chars, max_tokens=max_tokens)
+        request: dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "messages": wire,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        if tools:
+            request["tools"] = [
+                {"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.parameters}}
+                for t in tools
+            ]
+        text_parts: list[str] = []
+        calls: dict[int, dict[str, str]] = {}
+        usage = None
+        async with spend.metered(self.name, operation, estimate, caller_pays=self._caller_pays) as meter:
+            await ratelimit.bucket(self.name).acquire()
+            try:
+                stream = await client.chat.completions.create(**request)
+                async for chunk in stream:
+                    if getattr(chunk, "usage", None) is not None:
+                        usage = chunk.usage
+                    for choice in chunk.choices or []:
+                        delta = choice.delta
+                        if delta is None:
+                            continue
+                        if delta.content:
+                            text_parts.append(delta.content)
+                            if on_text is not None:
+                                await on_text(delta.content)
+                        for fragment in delta.tool_calls or []:
+                            slot = calls.setdefault(fragment.index, {"id": "", "name": "", "arguments": ""})
+                            if fragment.id:
+                                slot["id"] = fragment.id
+                            if fragment.function is not None:
+                                slot["name"] += fragment.function.name or ""
+                                slot["arguments"] += fragment.function.arguments or ""
+            except openai.APIError as exc:
+                raise self._error(exc) from exc
+            except Exception as exc:
+                raise LLMError(self.name, f"unexpected failure: {exc}") from exc
+            await self._record(meter, SimpleNamespace(usage=usage, model=self.model), kind="tool_turn")
+
+        return ToolTurn(
+            text="".join(text_parts),
+            tool_calls=[_tool_call(calls[i]) for i in sorted(calls)],
+            input_tokens=_tokens(usage, "prompt_tokens"),
+            output_tokens=_tokens(usage, "completion_tokens"),
+        )
+
     async def aclose(self) -> None:
         if self._client is not None:
             await self._client.close()
@@ -208,6 +292,44 @@ def _tokens(usage: Any, name: str) -> int:
     return value if isinstance(value, int) else 0
 
 
+# Prepaid accounts that have spent their credit report the second code.
+_OUT_OF_CREDIT_CODES = frozenset({"insufficient_quota", "credit_balance_exhausted"})
+
+
 def _out_of_quota(exc: openai.APIError) -> bool:
     """OpenAI answers 429 both for going too fast and for an empty balance."""
-    return isinstance(exc, openai.RateLimitError) and exc.code == "insufficient_quota"
+    return isinstance(exc, openai.RateLimitError) and exc.code in _OUT_OF_CREDIT_CODES
+
+
+def _tool_call(slot: dict[str, str]) -> ToolCall:
+    try:
+        arguments = json.loads(slot["arguments"] or "{}")
+        if not isinstance(arguments, dict):
+            raise ValueError("arguments must be an object")
+        return ToolCall(id=slot["id"], name=slot["name"], arguments=arguments)
+    except ValueError as exc:
+        return ToolCall(id=slot["id"], name=slot["name"], arguments={}, error=f"invalid arguments: {exc}")
+
+
+def _openai_messages(messages: list[MessageParam]) -> list[dict[str, Any]]:
+    """The neutral tool transcript (see llm.base) in OpenAI's wire shape."""
+    out: list[dict[str, Any]] = []
+    for message in messages:
+        role = message["role"]
+        if role == "tool":
+            out.append({"role": "tool", "tool_call_id": message["tool_call_id"], "content": message["content"]})
+        elif role == "assistant" and message.get("tool_calls"):
+            out.append(
+                {
+                    "role": "assistant",
+                    "content": message.get("content") or None,
+                    "tool_calls": [
+                        {"id": c.id, "type": "function",
+                         "function": {"name": c.name, "arguments": json.dumps(c.arguments)}}
+                        for c in message["tool_calls"]
+                    ],
+                }
+            )
+        else:
+            out.append({"role": role, "content": message["content"]})
+    return out

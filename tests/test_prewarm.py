@@ -142,18 +142,22 @@ async def test_the_sql_and_python_enrichment_rules_agree(session, monkeypatch):
         detector_k=2, detector_window=20, detector_floor=0.02,
     )
     cases = [
-        (NewsStatus.PENDING, 0, now + timedelta(days=1)),
-        (NewsStatus.COMPLETE, 1, now - timedelta(days=1)),
-        (NewsStatus.PARTIAL, 1, now + timedelta(hours=1)),
-        (NewsStatus.PARTIAL, 1, now - timedelta(hours=1)),
-        (NewsStatus.FAILED, 2, now - timedelta(days=1)),
-        (NewsStatus.FAILED, 3, now - timedelta(days=1)),
+        (NewsStatus.PENDING, 0, now + timedelta(days=1), True),
+        (NewsStatus.COMPLETE, 1, now - timedelta(days=1), True),
+        (NewsStatus.PARTIAL, 1, now + timedelta(hours=1), True),
+        (NewsStatus.PARTIAL, 1, now - timedelta(hours=1), True),
+        (NewsStatus.FAILED, 2, now - timedelta(days=1), True),
+        (NewsStatus.FAILED, 3, now - timedelta(days=1), True),
+        # Kept only because they were paid for (qualifies false): never owed.
+        (NewsStatus.PENDING, 0, now + timedelta(days=1), False),
+        (NewsStatus.FAILED, 2, now - timedelta(days=1), False),
     ]
-    for i, (status, attempts, closes) in enumerate(cases):
+    for i, (status, attempts, closes, qualifies) in enumerate(cases):
         session.add(
             Movement(
                 **base, date=date(2026, 1, 1) + timedelta(days=i),
                 news_status=status, news_attempts=attempts, news_window_closes_at=closes,
+                qualifies=qualifies,
             )
         )
     await session.commit()
@@ -185,9 +189,12 @@ async def test_a_ticker_being_ingested_by_a_user_is_skipped(db, monkeypatch):
     assert await all_of(db, Job) == []
 
 
-async def test_new_tickers_get_a_full_year_and_known_ones_the_short_window(db, monkeypatch):
+async def test_new_tickers_get_full_history_and_known_ones_the_short_window(db, monkeypatch):
+    """Full history is the display window plus the decomposition's estimation
+    history before it (v2 Phase 1; it was the display window alone)."""
     monkeypatch.setattr(settings, "prewarm_price_lookback_days", 45)
     monkeypatch.setattr(settings, "price_history_days", 365)
+    monkeypatch.setattr(settings, "price_estimation_extra_days", 200)
     run = await new_run(db)
     async with db() as session:  # KNOWN already has recent bars and a profile
         known = await ingestion.get_or_create_ticker(session, "KNOWN")
@@ -203,7 +210,7 @@ async def test_new_tickers_get_a_full_year_and_known_ones_the_short_window(db, m
             session, [entry("KNOWN"), entry("NEW")], run.id, now=datetime.now(timezone.utc)
         )
 
-    assert sorted(feed.calls) == [(["KNOWN"], 45, []), (["NEW"], 365, ["NEW"])]
+    assert sorted(feed.calls) == [(["KNOWN"], 45, []), (["NEW"], 365 + 200, ["NEW"])]
 
 
 async def test_a_movement_past_its_attempt_cap_is_not_queued_again(db, monkeypatch):

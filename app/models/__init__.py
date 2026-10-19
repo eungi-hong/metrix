@@ -7,6 +7,7 @@ configures relationships, and so Alembic autogenerate sees the full metadata.
 from app.db.base import Base
 from app.models.chat import ChatMessage, Conversation
 from app.models.demand import TickerDemand
+from app.models.filings import Filing, MovementFiling
 from app.models.enums import (
     Direction,
     IngestStatus,
@@ -26,11 +27,14 @@ from app.models.news import (
 )
 from app.models.symbols import ListedSymbol
 from app.models.usage import SpendDaily, UsageEvent
+from app.models.watchlists import Watchlist, WatchlistHolding
 
 __all__ = [
     "ApiKey",
     "Base",
     "ChatMessage",
+    "Filing",
+    "MovementFiling",
     "Conversation",
     "Direction",
     "IngestStatus",
@@ -55,6 +59,12 @@ __all__ = [
     "TickerDemand",
     "UsageEvent",
     "User",
+    "Watchlist",
+    "WatchlistHolding",
     "normalize_url",
     "url_fingerprint",
 ]
+
+# The data-version session hooks, registered wherever the models are loaded
+# (API, worker, scripts, tests). Imported last: it needs the models above.
+from app.db import versions as _versions  # noqa: E402,F401

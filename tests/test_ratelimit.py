@@ -436,6 +436,9 @@ class BusyLLM(StubLLM):
     async def complete(self, **kwargs):
         raise busy()
 
+    async def tool_turn(self, **kwargs):
+        raise busy()
+
 
 async def test_a_busy_provider_retries_the_job_and_spares_the_movement(db):
     async with db() as session:
@@ -472,7 +475,9 @@ async def test_a_busy_price_source_releases_the_ticker_unharmed(session_factory,
         assert await ingestion.claim_ingestion(session, ticker), "free to claim again"
 
 
-async def test_chat_with_a_busy_model_is_503_and_keeps_the_quota(session_factory, monkeypatch):
+async def test_chat_with_a_busy_model_falls_back_and_keeps_the_quota(session_factory, monkeypatch):
+    # Changed in v2 Phase 5: a busy model gets the database summary (200,
+    # answered_by "fallback") rather than a 503; the quota is still given back.
     monkeypatch.setitem(
         settings.plan_limits_json, "free",
         settings.plan_limits_json["free"].model_copy(update={"chat_per_day": 1}),
@@ -480,9 +485,8 @@ async def test_chat_with_a_busy_model_is_503_and_keeps_the_quota(session_factory
     _, key = await new_api_key(session_factory, plan=Plan.FREE)
     async with api_client(api_app(session_factory, BusyLLM()), key) as client:
         response = await client.post("/chat", json={"question": "Why?"})
-    assert response.status_code == 503
-    assert response.json()["error"] == "upstream_unavailable"
-    assert 1 <= int(response.headers["retry-after"]) <= 21
+    assert response.status_code == 200
+    assert response.json()["answered_by"] == "fallback"
 
     async with api_client(api_app(session_factory, StubLLM()), key) as client:
         assert (await client.post("/chat", json={"question": "Why?"})).status_code == 200
