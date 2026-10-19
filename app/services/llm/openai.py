@@ -223,7 +223,7 @@ class OpenAIProvider(LLMProvider):
         if _out_of_quota(exc):
             # A 429, but about billing, not pace: waiting will not help, and
             # backing off would stall every other caller for nothing.
-            return LLMError(self.name, self._describe(exc), permanent=True)
+            return LLMError(self.name, self._describe(exc), permanent=True, out_of_credit=True)
         if isinstance(exc, openai.RateLimitError):
             headers = exc.response.headers if exc.response is not None else {}
             # Which limit was hit, from OpenAI's own headers: nothing secret.

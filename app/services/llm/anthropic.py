@@ -242,12 +242,16 @@ class AnthropicProvider(LLMProvider):
         permanent = isinstance(
             exc, (anthropic.AuthenticationError, anthropic.PermissionDeniedError)
         )
+        if _out_of_credit(exc):
+            return LLMError(self.name, self._describe(exc), permanent=True, out_of_credit=True)
         return LLMError(self.name, self._describe(exc), permanent=permanent)
 
     def _describe(self, exc: anthropic.APIError) -> str:
         """A message safe to surface, without leaking keys or full payloads."""
         if isinstance(exc, anthropic.AuthenticationError):
             return "authentication failed -- check ANTHROPIC_API_KEY"
+        if _out_of_credit(exc):
+            return "the Anthropic account is out of credit -- check its billing"
         if isinstance(exc, anthropic.RateLimitError):
             return "rate limited"
         if isinstance(exc, anthropic.APIStatusError):
@@ -325,3 +329,11 @@ def _anthropic_messages(messages: list[MessageParam]) -> list[dict[str, Any]]:
         else:
             out.append({"role": role, "content": message["content"]})
     return out
+
+
+def _out_of_credit(exc: anthropic.APIError) -> bool:
+    """Anthropic reports an empty balance as a 400 whose message names it."""
+    return (
+        isinstance(exc, anthropic.BadRequestError)
+        and "credit balance" in str(getattr(exc, "message", "") or "").lower()
+    )

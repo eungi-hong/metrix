@@ -51,6 +51,18 @@ async def test_a_failing_model_streams_the_fallback(session_factory, user_key, r
         received = events((await client.post("/chat/stream", json={"question": "Why did SYNTH move?"})).text)
     assert [k for k, _ in received] == ["done"]
     assert received[0][1]["answered_by"] == "fallback" and received[0][1]["grounded"]
+    assert received[0][1]["fallback_reason"] == "unavailable"
+
+
+async def test_an_empty_provider_balance_is_reported_as_out_of_credit(session_factory, user_key, ready):  # noqa: F811
+    class Broke(StubLLM):
+        async def tool_turn(self, **kwargs):
+            raise LLMError("openai", "the OpenAI account is out of credit", permanent=True, out_of_credit=True)
+
+    async with api_client(api_app(session_factory, Broke()), user_key[1]) as client:
+        body = (await client.post("/chat", json={"question": "Why did SYNTH move?"})).json()
+    assert body["answered_by"] == "fallback" and body["fallback_reason"] == "out_of_credit"
+    assert "out of credit" not in body["answer"]  # the provider's own words stay in the log
 
 
 async def test_an_internal_failure_is_an_error_event(session_factory, user_key, ready):  # noqa: F811

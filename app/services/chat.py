@@ -37,7 +37,13 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.errors import ConfigurationError, LLMError, UpstreamError, WorkDeferred
+from app.core.errors import (
+    ConfigurationError,
+    LLMError,
+    SpendCapReached,
+    UpstreamError,
+    WorkDeferred,
+)
 from app.core.logging import get_logger
 from app.core.symbols import normalize_symbol
 from app.models.chat import ChatMessage, Conversation
@@ -107,6 +113,23 @@ class ConversationNotFound(LookupError):
     pass
 
 
+def fallback_reason(exc: BaseException) -> str:
+    """Why chat answered from the database, in terms a visitor can act on.
+
+    Only the category leaves the server: the provider's own message can name
+    accounts or limits, so it stays in the log.
+    """
+    if isinstance(exc, LLMError) and exc.out_of_credit:
+        return "out_of_credit"
+    if isinstance(exc, SpendCapReached):
+        return "spend_cap"
+    if isinstance(exc, WorkDeferred):
+        return "busy"
+    if isinstance(exc, ConfigurationError) or (isinstance(exc, LLMError) and exc.permanent):
+        return "not_configured"
+    return "unavailable"
+
+
 @dataclass(slots=True)
 class LoopResult:
     text: str
@@ -143,10 +166,13 @@ async def answer_question(
             raise ConfigurationError("no language model is configured")
         result = await _run_loop(llm, turn, history + [{"role": "user", "content": user}], emit)
     except (UpstreamError, ConfigurationError, WorkDeferred) as exc:
-        logger.warning("chat_fallback", reason=type(exc).__name__, detail=str(exc)[:200])
+        reason = fallback_reason(exc)
+        logger.warning(
+            "chat_fallback", reason=reason, error=type(exc).__name__, detail=str(exc)[:200]
+        )
         turn = chat_tools.Turn(session=session, principal=principal)  # only what the summary cites
         text = await fallback_answer(turn, tickers, request.start, request.end)
-        result = LoopResult(text=text, tool_calls=[], answered_by="fallback", fallback_reason=type(exc).__name__)
+        result = LoopResult(text=text, tool_calls=[], answered_by="fallback", fallback_reason=reason)
 
     answer, cited, stripped = check_citations(result.text, turn.labels)
     if stripped:
@@ -191,6 +217,7 @@ async def answer_question(
         sources=sources,
         grounded=bool(cited),
         answered_by=result.answered_by,
+        fallback_reason=result.fallback_reason,
         tool_calls=result.tool_calls,
         citations_removed=len(stripped),
         suggestions=suggestions,
