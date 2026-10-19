@@ -28,6 +28,9 @@ interface Turn {
   error: unknown;
 }
 
+/** How close to the bottom (px) still counts as "at the bottom" for following the stream. */
+const FOLLOW_SLACK_PX = 120;
+
 const FALLBACK_NOTE = "Summary from stored data. Not written by the model.";
 
 /** Why the model did not answer, in words a visitor can act on. */
@@ -125,7 +128,23 @@ export default function AskPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => { end.current?.scrollIntoView({ block: "end", behavior: "auto" }); }, [turns]);
+  // Follow the answer as it streams only while the reader is at the bottom.
+  // Scrolling up to read stops the follow, so new text never yanks the page
+  // back down mid-scroll; returning to the bottom, or asking again, resumes it.
+  const following = useRef(true);
+  useEffect(() => {
+    const onScroll = () => {
+      const root = document.documentElement;
+      following.current = root.scrollHeight - (window.scrollY + window.innerHeight) < FOLLOW_SLACK_PX;
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
+  const lastTurnId = turns.at(-1)?.id;
+  useEffect(() => { following.current = true; }, [lastTurnId]);
+  useEffect(() => {
+    if (following.current) end.current?.scrollIntoView({ block: "end", behavior: "auto" });
+  }, [turns]);
 
   const startNew = () => {
     abort.current?.abort();
