@@ -63,7 +63,18 @@ class NewsProviderError(UpstreamError):
 
 
 class LLMError(UpstreamError):
-    """An LLM call failed, or returned something unparseable."""
+    """An LLM call failed, or returned something unparseable.
+
+    `out_of_credit` marks the one failure a person has to act on (top up the
+    provider account): callers use it to say so in plain words instead of a
+    generic "unavailable".
+    """
+
+    def __init__(
+        self, provider: str, message: str, *, permanent: bool = False, out_of_credit: bool = False
+    ) -> None:
+        self.out_of_credit = out_of_credit
+        super().__init__(provider, message, permanent=permanent)
 
 
 def is_permanent(error: BaseException) -> bool:

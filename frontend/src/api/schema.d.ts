@@ -696,6 +696,11 @@ export interface components {
             /** Conversation Id */
             conversation_id: string;
             /**
+             * Fallback Reason
+             * @description Why the answer is a fallback, when it is: 'out_of_credit' (the AI provider's account has no credit left), 'spend_cap' (today's spending cap is reached), 'busy' (the provider is rate limiting), 'not_configured' (no working key) or 'unavailable' (any other provider failure). Null when the model answered.
+             */
+            fallback_reason: ("out_of_credit" | "spend_cap" | "busy" | "not_configured" | "unavailable") | null;
+            /**
              * Grounded
              * @description True when the answer cites stored evidence (a movement, article or filing label that a lookup returned); false otherwise, in which case it says what it could not find.
              */

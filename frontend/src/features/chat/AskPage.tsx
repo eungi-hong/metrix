@@ -30,6 +30,24 @@ interface Turn {
 
 const FALLBACK_NOTE = "Summary from stored data. Not written by the model.";
 
+/** Why the model did not answer, in words a visitor can act on. */
+export function fallbackNote(reason: ChatResponse["fallback_reason"]): string {
+  switch (reason) {
+    case "out_of_credit":
+      return "The AI service is out of credit, so this is a summary from stored data, not written by the model. Answers will be written by the model again once the account is topped up.";
+    case "spend_cap":
+      return "Today's AI spending limit is reached, so this is a summary from stored data, not written by the model. It resets at midnight UTC.";
+    case "busy":
+      return "The AI service is busy right now, so this is a summary from stored data, not written by the model. Try again in a minute.";
+    case "not_configured":
+      return "The AI service is not set up on this server, so this is a summary from stored data, not written by the model.";
+    case "unavailable":
+      return "The AI service did not respond, so this is a summary from stored data, not written by the model. Try again shortly.";
+    default:
+      return FALLBACK_NOTE;
+  }
+}
+
 export default function AskPage() {
   const [params, setParams] = useSearchParams();
   const client = useQueryClient();
@@ -198,7 +216,7 @@ function TurnView({ turn, onAsk }: { turn: Turn; onAsk: (q: string) => void }) {
           </button>
         )}
         {openCalls && <ul className="mb-2 grid gap-0.5 text-caption text-mute">{turn.calls.map((c, i) => <li key={i}>{c.summary}</li>)}</ul>}
-        {response?.answered_by === "fallback" && <p className="mb-2 inline-block rounded-control bg-warn-soft px-2 py-1 text-caption text-ink">{FALLBACK_NOTE}</p>}
+        {response?.answered_by === "fallback" && <p role="status" className="mb-2 inline-block rounded-control bg-warn-soft px-2 py-1 text-caption text-ink">{fallbackNote(response.fallback_reason)}</p>}
         {turn.error ? (
           <Notice problem={describeError(turn.error)} onRetry={() => onAsk(turn.question)} />
         ) : turn.answer ? (

@@ -90,6 +90,15 @@ class ChatResponse(ApiModel):
         description="'fallback': the model was unavailable or over the spend cap, and the answer is a "
         "summary assembled from the database, not written by a model.",
     )
+    fallback_reason: (
+        Literal["out_of_credit", "spend_cap", "busy", "not_configured", "unavailable"] | None
+    ) = Field(
+        default=None,
+        description="Why the answer is a fallback, when it is: 'out_of_credit' (the AI provider's "
+        "account has no credit left), 'spend_cap' (today's spending cap is reached), 'busy' (the "
+        "provider is rate limiting), 'not_configured' (no working key) or 'unavailable' (any "
+        "other provider failure). Null when the model answered.",
+    )
     tool_calls: list[ToolCallOut] = Field(default_factory=list)
     citations_removed: int = Field(
         default=0, description="Citations of labels no lookup returned, removed from the answer."
