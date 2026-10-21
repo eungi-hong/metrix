@@ -24,6 +24,11 @@ class BackfillQueued(ApiModel):
     symbols: list[str]
 
 
+class RetryQueued(ApiModel):
+    queued: int = Field(description="Movements whose failed news research was queued again.")
+    movements: list[str] = Field(description="'SYMBOL date' of each, newest first.")
+
+
 class JobCount(ApiModel):
     kind: JobKind
     status: JobStatus

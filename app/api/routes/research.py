@@ -15,7 +15,7 @@ endpoint that fetches.
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import sqlalchemy as sa
 from fastapi import APIRouter, HTTPException, Query, Request, Response
@@ -403,7 +403,7 @@ async def market_pulse(
         sa.select(sa.func.max(PriceBar.date)).join(Ticker, Ticker.id == PriceBar.ticker_id).where(Ticker.symbol == market)
     ) or await session.scalar(sa.select(sa.func.max(Movement.date)))
     if latest is None:
-        return MarketPulseOut(sessions=[], movers=[], sectors=[])
+        return MarketPulseOut(sessions=[], movers=[], featured=None, sectors=[])
     first = sessions.offset_session(latest, -(sessions_back - 1)) if sessions.is_session(latest) else latest
     first = first or latest
     covered = [first]
@@ -429,22 +429,8 @@ async def market_pulse(
         )
     ).all()
     now = datetime.now(timezone.utc)
-    out_movers = []
-    for m in movers:
-        shaped = _movement_out(m, None, None, now)
-        top = shaped.news[0] if shaped.news else None
-        if top is not None:
-            explanation = f"{top.article.title or top.article.url}: {top.rationale}" if top.rationale else (top.article.title or top.article.url)
-        else:
-            explanation = shaped.evidence.detail if shaped.evidence else "No evidence yet."
-        out_movers.append(
-            PulseMoverOut(
-                symbol=m.ticker.symbol, company_name=m.ticker.company_name, date=m.date,
-                daily_return=m.daily_return, abnormal_return=m.abnormal_return, sar=m.sar,
-                dominant=m.dominant_component, explanation=explanation,
-                evidence=shaped.evidence.state if shaped.evidence else "not_started",
-            )
-        )
+    out_movers = [_pulse_mover(m, now) for m in movers]
+    featured = await _featured_mover(session, latest, now)
 
     sector_map = settings.benchmark_sector_map_json
     labels = [("Market", market)] + sorted((name, symbol) for name, symbol in sector_map.items())
@@ -453,8 +439,58 @@ async def market_pulse(
     return MarketPulseOut(
         sessions=covered,
         movers=out_movers,
+        featured=featured,
         sectors=[SectorReturnOut(sector=name, symbol=symbol, total_return=returns.get(symbol)) for name, symbol in labels],
     )
 
 
+def _pulse_mover(m: Movement, now: datetime) -> PulseMoverOut:
+    shaped = _movement_out(m, None, None, now)
+    top = shaped.news[0] if shaped.news else None
+    if top is not None:
+        explanation = f"{top.article.title or top.article.url}: {top.rationale}" if top.rationale else (top.article.title or top.article.url)
+    else:
+        explanation = shaped.evidence.detail if shaped.evidence else "No evidence yet."
+    return PulseMoverOut(
+        symbol=m.ticker.symbol, company_name=m.ticker.company_name, date=m.date,
+        daily_return=m.daily_return, abnormal_return=m.abnormal_return, sar=m.sar,
+        dominant=m.dominant_component, explanation=explanation,
+        evidence=shaped.evidence.state if shaped.evidence else "not_started",
+    )
 
+
+async def _featured_mover(session: AsyncSession, latest: date, now: datetime) -> PulseMoverOut | None:
+    """The first thing a visitor sees should be a move Metrix explains well.
+
+    The latest sessions' moves are often still waiting for news (their window
+    has not closed, or the nightly budget has not reached them), so featuring
+    the newest move would often say "no clear driver". Instead: the largest
+    move in the lookback whose strongest current link scores at least
+    FEATURED_MIN_SCORE.
+    """
+    since = latest - timedelta(days=settings.featured_lookback_days)
+    strong = (
+        sa.select(MovementNewsLink.movement_id)
+        .where(MovementNewsLink.relevance_score >= settings.featured_min_score)
+        .where(MovementNewsLink.superseded_at.is_(None))
+    )
+    candidates = (
+        await session.scalars(
+            sa.select(Movement)
+            .join(Ticker, Ticker.id == Movement.ticker_id)
+            .where(Movement.date >= since, Movement.date <= latest, Movement.qualifies.is_(True),
+                   Ticker.is_benchmark.is_(False), Movement.id.in_(strong))
+            .order_by(Movement.abs_return.desc(), Movement.date.desc())
+            .limit(5)
+            .options(
+                selectinload(Movement.news_links).selectinload(MovementNewsLink.article),
+                selectinload(Movement.filings),
+                selectinload(Movement.ticker),
+            )
+        )
+    ).all()
+    for movement in candidates:
+        mover = _pulse_mover(movement, now)
+        if mover.evidence == "explained":
+            return mover
+    return None

@@ -1,7 +1,8 @@
 /**
  * The first ten seconds: real, pre-warmed data with no clicks and no key
- * prompt. The featured case file is the strongest explained move of the
- * latest sessions; the pulse ranks every move by how unusual it was.
+ * prompt. The featured case file is the API's pick: a large recent move whose
+ * evidence clearly explains it. The pulse lists explained moves first, so a
+ * visitor's first look is at answers, not at moves still waiting for news.
  */
 import { Link } from "react-router-dom";
 import { describeError } from "../../api/errors";
@@ -15,8 +16,8 @@ import { PulseList, PulseSkeleton, SectorStrip } from "../pulse/PulseList";
 
 export default function HomePage() {
   const pulse = usePulse(2);
-  const movers = pulse.data?.movers ?? [];
-  const featured = movers.find((m) => m.evidence === "explained") ?? movers[0];
+  const movers = explainedFirst(pulse.data?.movers ?? []);
+  const featured = pulse.data?.featured ?? movers.find((m) => m.evidence === "explained");
   const through = pulse.data?.sessions.at(-1);
   return (
     <div className="grid gap-6">
@@ -28,7 +29,7 @@ export default function HomePage() {
       <div className="grid gap-6 lg:grid-cols-[minmax(0,7fr)_minmax(0,5fr)]">
         <Panel className="p-5" aria-labelledby="featured">
           <SectionTitle id="featured">Featured case file</SectionTitle>
-          {featured ? <Featured mover={featured} /> : pulse.isPending ? <FeaturedSkeleton /> : <Empty title="No moves stored yet">Search for a ticker to research it.</Empty>}
+          {featured ? <Featured mover={featured} /> : pulse.isPending ? <FeaturedSkeleton /> : <Empty title="No explained moves yet">Search for a ticker to research it.</Empty>}
         </Panel>
         <div className="grid content-start gap-6">
           <Panel className="p-4" aria-labelledby="pulse">
@@ -41,7 +42,7 @@ export default function HomePage() {
           </Panel>
         </div>
       </div>
-      {movers.length > 0 && <Suggestions movers={movers} />}
+      {movers.length > 0 && <Suggestions movers={featured ? [featured, ...movers.filter((m) => m !== featured && !sameMove(m, featured))] : movers} />}
     </div>
   );
 }
@@ -85,6 +86,16 @@ function Featured({ mover }: { mover: PulseMover }) {
       </div>
     </article>
   );
+}
+
+/** Explained moves first (each group keeps the API's order), failed research last. */
+export function explainedFirst(movers: PulseMover[]): PulseMover[] {
+  const rank = (m: PulseMover) => (m.evidence === "explained" ? 0 : m.evidence === "failed" ? 2 : 1);
+  return movers.map((m, i) => [m, i] as const).sort((a, b) => rank(a[0]) - rank(b[0]) || a[1] - b[1]).map(([m]) => m);
+}
+
+function sameMove(a: PulseMover, b: PulseMover) {
+  return a.symbol === b.symbol && a.date === b.date;
 }
 
 function FeaturedSkeleton() {

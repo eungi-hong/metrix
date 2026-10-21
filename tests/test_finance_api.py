@@ -151,6 +151,27 @@ async def test_the_admin_backfill_queues_one_job_per_stored_ticker(client, ready
     assert [job.payload for job in jobs] == [{"symbol": "SYNTH"}]  # deduplicated while active
 
 
+async def test_the_admin_retry_queues_failed_research_again(client, ready, session_factory, monkeypatch):
+    from app.models.enums import NewsStatus
+    from app.models.market import Movement
+
+    monkeypatch.setattr(settings, "admin_token", "s3cret")
+    _, company_day, _ = ready
+    async with session_factory() as session:
+        movement = await session.scalar(sa.select(Movement).where(Movement.date == company_day))
+        movement.news_status = NewsStatus.FAILED
+        movement.news_attempts = settings.news_max_attempts
+        await session.commit()
+        movement_id = movement.id
+
+    response = await client.post("/admin/retry-failed", headers=ADMIN, params={"days": 730})
+    assert response.status_code == 202
+    assert response.json() == {"queued": 1, "movements": [f"SYNTH {company_day.isoformat()}"]}
+    async with session_factory() as session:
+        (job,) = (await session.scalars(sa.select(Job).where(Job.kind == JobKind.ENRICH_MOVEMENT))).all()
+    assert job.payload == {"movement_id": movement_id, "retry_exhausted": True}
+
+
 async def test_chat_leaves_out_retired_movements_and_superseded_links(client, ready):
     _, company_day, retired_day = ready
     body = (await client.post("/chat", json={"ticker": "SYNTH", "question": "What moved it?"})).json()

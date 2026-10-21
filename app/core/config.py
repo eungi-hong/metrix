@@ -800,6 +800,20 @@ class Settings(BaseSettings):
         default=7, ge=1, description="How long the ticker-to-CIK map is cached."
     )
 
+    # ------------------------------------------------------------- home page
+    featured_lookback_days: int = Field(
+        default=180,
+        ge=1,
+        description="How far back (calendar days) the home page looks for a well-explained move to feature.",
+    )
+    featured_min_score: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description="The featured move's strongest evidence must score at least this, so the first "
+        "thing a visitor sees is a move Metrix actually explains.",
+    )
+
     # ------------------------------------------------------------------ chat
     chat_max_tool_calls: int = Field(
         default=5, ge=0, le=10, description="Tool calls Ask Metrix may make per question."

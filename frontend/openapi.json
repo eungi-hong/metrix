@@ -2177,6 +2177,17 @@
       },
       "MarketPulseOut": {
         "properties": {
+          "featured": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PulseMoverOut"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The move to show first: the largest recent move whose linked evidence clearly explains it (top score at least FEATURED_MIN_SCORE), looking back FEATURED_LOOKBACK_DAYS. Null when nothing qualifies."
+          },
           "movers": {
             "description": "Largest abnormal moves first.",
             "items": {
@@ -2206,6 +2217,7 @@
         "required": [
           "sessions",
           "movers",
+          "featured",
           "sectors"
         ],
         "title": "MarketPulseOut",
@@ -3311,6 +3323,29 @@
           "client_ip_by_trusted_count"
         ],
         "title": "RequestInfo",
+        "type": "object"
+      },
+      "RetryQueued": {
+        "properties": {
+          "movements": {
+            "description": "'SYMBOL date' of each, newest first.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Movements",
+            "type": "array"
+          },
+          "queued": {
+            "description": "Movements whose failed news research was queued again.",
+            "title": "Queued",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "queued",
+          "movements"
+        ],
+        "title": "RetryQueued",
         "type": "object"
       },
       "SectorReturnOut": {
@@ -4555,6 +4590,84 @@
           }
         },
         "summary": "What this request looks like on arrival, to set TRUSTED_PROXY_COUNT",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/admin/retry-failed": {
+      "post": {
+        "description": "Movements that used up their automatic attempts stay FAILED until\nsomeone refreshes them; after an outage that was not their fault (a\nprovider out of credit), that is every move in the outage. This queues\nthem again in one call, newest first. Each job is metered and held to the\nspend cap like any other, so `limit` bounds what one call can cost.",
+        "operationId": "retry_failed_research_admin_retry_failed_post",
+        "parameters": [
+          {
+            "description": "Only moves this many days back or newer.",
+            "in": "query",
+            "name": "days",
+            "required": false,
+            "schema": {
+              "default": 120,
+              "description": "Only moves this many days back or newer.",
+              "maximum": 730,
+              "minimum": 1,
+              "title": "Days",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "At most this many, newest first.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "description": "At most this many, newest first.",
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "header",
+            "name": "x-admin-token",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Admin-Token"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetryQueued"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Queue news research again for moves whose research failed",
         "tags": [
           "admin"
         ]

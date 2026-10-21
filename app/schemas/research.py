@@ -160,4 +160,10 @@ class SectorReturnOut(ApiModel):
 class MarketPulseOut(ApiModel):
     sessions: list[date] = Field(description="The sessions covered, latest last.")
     movers: list[PulseMoverOut] = Field(description="Largest abnormal moves first.")
+    featured: PulseMoverOut | None = Field(
+        default=None,
+        description="The move to show first: the largest recent move whose linked evidence clearly "
+        "explains it (top score at least FEATURED_MIN_SCORE), looking back FEATURED_LOOKBACK_DAYS. "
+        "Null when nothing qualifies.",
+    )
     sectors: list[SectorReturnOut] = Field(description="Benchmarks' compounded return over the sessions.")
