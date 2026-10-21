@@ -18,7 +18,8 @@ from app.core.config import settings
 from app.core.context import CallClass
 from app.models.identity import ApiKey, Plan, User
 from app.models.jobs import Job, JobKind, JobSource, JobStatus, PrewarmRun
-from app.models.market import PriceBar, Ticker
+from app.models.enums import NewsStatus
+from app.models.market import Movement, PriceBar, Ticker
 from app.models.usage import UsageEvent
 from app.schemas.admin import (
     BackfillQueued,
@@ -31,6 +32,7 @@ from app.schemas.admin import (
     PrewarmTriggered,
     QueueSummary,
     RequestInfo,
+    RetryQueued,
     SpendByOperation,
     SpendByUser,
     UsageSummary,
@@ -114,6 +116,53 @@ async def trigger_backfill_analytics(session: SessionDep) -> BackfillQueued:
         )
     await session.commit()
     return BackfillQueued(queued=len(symbols), symbols=symbols)
+
+
+@router.post(
+    "/retry-failed",
+    response_model=RetryQueued,
+    status_code=202,
+    summary="Queue news research again for moves whose research failed",
+)
+async def retry_failed_research(
+    session: SessionDep,
+    days: int = Query(120, ge=1, le=730, description="Only moves this many days back or newer."),
+    limit: int = Query(20, ge=1, le=200, description="At most this many, newest first."),
+) -> RetryQueued:
+    """Movements that used up their automatic attempts stay FAILED until
+    someone refreshes them; after an outage that was not their fault (a
+    provider out of credit), that is every move in the outage. This queues
+    them again in one call, newest first. Each job is metered and held to the
+    spend cap like any other, so `limit` bounds what one call can cost."""
+    since = datetime.now(timezone.utc).date() - timedelta(days=days)
+    movements = (
+        await session.scalars(
+            sa.select(Movement)
+            .join(Ticker, Ticker.id == Movement.ticker_id)
+            .where(Movement.news_status == NewsStatus.FAILED, Movement.qualifies.is_(True),
+                   Movement.date >= since, Ticker.is_benchmark.is_(False))
+            .order_by(Movement.date.desc(), Movement.abs_return.desc())
+            .limit(limit)
+        )
+    ).all()
+    symbols = dict(
+        (await session.execute(sa.select(Ticker.id, Ticker.symbol).where(
+            Ticker.id.in_({m.ticker_id for m in movements})))).all()
+    ) if movements else {}
+    for movement in movements:
+        await queue.enqueue(
+            session,
+            JobKind.ENRICH_MOVEMENT,
+            {"movement_id": movement.id, "retry_exhausted": True},
+            priority=queue.PRIORITY_MACRO,
+            dedupe_key=queue.enrich_key(movement.id),
+            source=JobSource.SCHEDULED,
+        )
+    await session.commit()
+    return RetryQueued(
+        queued=len(movements),
+        movements=[f"{symbols[m.ticker_id]} {m.date.isoformat()}" for m in movements],
+    )
 
 
 @router.get("/queue", response_model=QueueSummary, summary="Queue health and the last run")

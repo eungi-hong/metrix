@@ -102,6 +102,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/retry-failed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Queue news research again for moves whose research failed
+         * @description Movements that used up their automatic attempts stay FAILED until
+         *     someone refreshes them; after an outage that was not their fault (a
+         *     provider out of credit), that is every move in the outage. This queues
+         *     them again in one call, newest first. Each job is metered and held to the
+         *     spend cap like any other, so `limit` bounds what one call can cost.
+         */
+        post: operations["retry_failed_research_admin_retry_failed_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/usage": {
         parameters: {
             query?: never;
@@ -1302,6 +1326,8 @@ export interface components {
         };
         /** MarketPulseOut */
         MarketPulseOut: {
+            /** @description The move to show first: the largest recent move whose linked evidence clearly explains it (top score at least FEATURED_MIN_SCORE), looking back FEATURED_LOOKBACK_DAYS. Null when nothing qualifies. */
+            featured: components["schemas"]["PulseMoverOut"] | null;
             /**
              * Movers
              * @description Largest abnormal moves first.
@@ -1758,6 +1784,19 @@ export interface components {
             x_forwarded_for: string | null;
             /** X Real Ip */
             x_real_ip: string | null;
+        };
+        /** RetryQueued */
+        RetryQueued: {
+            /**
+             * Movements
+             * @description 'SYMBOL date' of each, newest first.
+             */
+            movements: string[];
+            /**
+             * Queued
+             * @description Movements whose failed news research was queued again.
+             */
+            queued: number;
         };
         /** SectorReturnOut */
         SectorReturnOut: {
@@ -2278,6 +2317,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RequestInfo"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retry_failed_research_admin_retry_failed_post: {
+        parameters: {
+            query?: {
+                /** @description Only moves this many days back or newer. */
+                days?: number;
+                /** @description At most this many, newest first. */
+                limit?: number;
+            };
+            header?: {
+                "x-admin-token"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RetryQueued"];
                 };
             };
             /** @description Validation Error */

@@ -135,7 +135,7 @@ def status_for(
                 "retrying", "The last attempt failed; it is retried in the nightly run.", closes_at,
                 schedule.next_run_after(now),
             )
-        return EvidenceStatus("failed", "Research failed repeatedly; a refresh retries it.", closes_at)
+        return EvidenceStatus("failed", "The news search failed, so this move has no explanation yet. It is retried on the next refresh.", closes_at)
     return EvidenceStatus(
         "not_started",
         "Not researched yet: queued when this ticker is next requested, or by the nightly run.",

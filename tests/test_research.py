@@ -205,10 +205,19 @@ async def test_the_pulse_ranks_abnormal_moves_and_reports_sectors(client, ready,
     assert sectors["SPY"]["sector"] == "Market" and sectors["SPY"]["total_return"] is not None
     assert sectors["XLV"]["total_return"] is None  # no bars stored
     assert all(m["symbol"] not in ("SPY", "XLK") for m in body["movers"])
+    featured = body["featured"]
+    assert featured is not None and featured["evidence"] == "explained" and featured["symbol"] == "SYNTH"
+
+
+async def test_the_featured_move_needs_strong_evidence(client, ready, monkeypatch):  # noqa: F811
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "featured_min_score", 1.0)
+    assert (await client.get("/market/pulse")).json()["featured"] is None
 
 
 async def test_an_empty_pulse(client):
-    assert (await client.get("/market/pulse")).json() == {"sessions": [], "movers": [], "sectors": []}
+    assert (await client.get("/market/pulse")).json() == {"sessions": [], "movers": [], "featured": None, "sectors": []}
 
 
 async def test_unknown_tickers_and_bad_symbols(client, session_factory):
