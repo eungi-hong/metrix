@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 import type { PulseMover, SectorReturn } from "../../api/types";
 import { Change, DriverChip, Skeleton, cx } from "../../design/ui";
 import { pp, shortDate, signedNumber } from "../../lib/format";
-import { evidenceWord, isPending } from "./evidence";
+import { evidenceDetail, isPending } from "./evidence";
 
 export function PulseList({ movers, limit, showDate = false }: { movers: PulseMover[]; limit?: number; showDate?: boolean }) {
   const rows = limit ? movers.slice(0, limit) : movers;
@@ -20,7 +20,7 @@ export function PulseList({ movers, limit, showDate = false }: { movers: PulseMo
               <DriverChip driver={m.dominant} compact />
             </span>
             <span className={cx("mt-0.5 line-clamp-2 block pl-[64px] text-caption", isPending(m.evidence) ? "text-mute" : "text-ink")}>
-              {m.evidence === "explained" ? m.explanation : `${evidenceWord(m.evidence)}. ${m.explanation}`}
+              {m.evidence === "explained" ? m.explanation : evidenceDetail(m.evidence, m.explanation)}
             </span>
             {m.abnormal_return != null && <span className="sr-only">Abnormal return {pp(m.abnormal_return)}</span>}
           </Link>
