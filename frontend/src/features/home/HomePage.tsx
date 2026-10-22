@@ -14,8 +14,11 @@ import { DecompositionBar } from "../movement/Decomposition";
 import { caseTitle } from "../movement/title";
 import { PulseList, PulseSkeleton, SectorStrip } from "../pulse/PulseList";
 
+const PULSE_SESSIONS = 5;
+
 export default function HomePage() {
-  const pulse = usePulse(2);
+  // A trading week, so two quiet days in a row never leave the page empty.
+  const pulse = usePulse(PULSE_SESSIONS);
   const movers = explainedFirst(pulse.data?.movers ?? []);
   const featured = pulse.data?.featured ?? movers.find((m) => m.evidence === "explained");
   const through = pulse.data?.sessions.at(-1);
@@ -34,10 +37,10 @@ export default function HomePage() {
         <div className="grid content-start gap-6">
           <Panel className="p-4" aria-labelledby="pulse">
             <SectionTitle id="pulse" aside={<Link className="underline underline-offset-2 hover:text-ink" to="/pulse">See all</Link>}>Market pulse</SectionTitle>
-            {pulse.isPending ? <PulseSkeleton /> : movers.length ? <PulseList movers={movers} limit={8} showDate /> : <Empty title="No flagged moves in the latest sessions" />}
+            {pulse.isPending ? <PulseSkeleton /> : movers.length ? <PulseList movers={movers} limit={8} showDate /> : <Empty title="No unusual moves in the last week" />}
           </Panel>
           <Panel className="p-4" aria-labelledby="sectors">
-            <SectionTitle id="sectors" aside="Last 2 sessions">Sectors</SectionTitle>
+            <SectionTitle id="sectors" aside={`Last ${PULSE_SESSIONS} sessions`}>Sectors</SectionTitle>
             {pulse.data ? <SectorStrip sectors={pulse.data.sectors} /> : <PulseSkeleton rows={5} />}
           </Panel>
         </div>

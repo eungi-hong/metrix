@@ -12,7 +12,7 @@ test("the first load shows real research with no clicks", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { level: 1 })).toContainText("Every unusual daily move");
   await expect(page.getByRole("heading", { name: /^Why NOVA rose/ })).toBeVisible();
-  await expect(page.getByRole("region", { name: "Market pulse" }).getByRole("link")).toHaveCount(5);
+  await expect(page.getByRole("region", { name: "Market pulse" }).getByRole("link")).toHaveCount(6); // the sample data's last 5 sessions
   await expect(page.getByText(/Data through the close/)).toBeVisible();
   expect(await seriousViolations(page)).toEqual([]);
 });
