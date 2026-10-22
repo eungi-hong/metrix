@@ -13,6 +13,7 @@ import { longDate, pct, shortDate, timingLabel } from "../../lib/format";
 import { DecompositionBar } from "../movement/Decomposition";
 import { caseTitle } from "../movement/title";
 import { PulseList, PulseSkeleton, SectorStrip } from "../pulse/PulseList";
+import { useFallbackFeatured } from "./fallbackFeatured";
 
 const PULSE_SESSIONS = 5;
 
@@ -20,7 +21,9 @@ export default function HomePage() {
   // A trading week, so two quiet days in a row never leave the page empty.
   const pulse = usePulse(PULSE_SESSIONS);
   const movers = explainedFirst(pulse.data?.movers ?? []);
-  const featured = pulse.data?.featured ?? movers.find((m) => m.evidence === "explained");
+  const fromPulse = pulse.data?.featured ?? movers.find((m) => m.evidence === "explained");
+  const fallback = useFallbackFeatured(Boolean(pulse.data) && !fromPulse);
+  const featured = fromPulse ?? fallback ?? undefined;
   const through = pulse.data?.sessions.at(-1);
   return (
     <div className="grid gap-6">
